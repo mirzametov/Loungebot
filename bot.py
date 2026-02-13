@@ -25,7 +25,7 @@ from loungebot.keyboards import (
 
 def guest_card_text(display_name: str) -> str:
     return (
-        "<b>КАРТА ГОСТЯ</b>\n\n"
+        "<b>КАРТА LEVEL</b>\n\n"
         f"{display_name}, твой уровень - <b>IRON⚙️</b>\n"
         "Номер карты: <b>4821</b>\n\n"
         "Всего визитов: <b>0</b>\n"
@@ -34,7 +34,7 @@ def guest_card_text(display_name: str) -> str:
         "• скидка <b>3%</b> на меню <b>Lounge</b>\n"
         "• скидка <b>3%</b> на <b>Прохват72</b>\n\n"
         "Покажи номер карты администратору,\n"
-        "чтобы засчитать визит по карте гостя\n"
+        "чтобы засчитать визит по карте level\n"
         "и применить скидку."
     )
 
