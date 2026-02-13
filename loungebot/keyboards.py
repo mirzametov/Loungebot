@@ -1,0 +1,6 @@
+BTN_GUEST_CARD = "🪪 LEVEL"
+BTN_MENU = "🧉 Меню"
+BTN_BOOKING = "🛋 Бронь"
+BTN_LOCATION = "🚕 Найти нас"
+BTN_REGISTER_CARD = "Заренистрировать карту"
+BTN_BACK = "👈Назад"

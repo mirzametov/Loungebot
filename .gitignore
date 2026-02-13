@@ -1,0 +1,6 @@
+.venv/
+.venv312/
+__pycache__/
+.env
+bot.log
+data/*.json
