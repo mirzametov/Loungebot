@@ -1,4 +1,5 @@
 import os
+from html import escape
 from pathlib import Path
 from urllib.parse import quote
 
@@ -22,10 +23,10 @@ from loungebot.keyboards import (
 )
 
 
-def guest_card_text() -> str:
+def guest_card_text(display_name: str) -> str:
     return (
         "<b>КАРТА ГОСТЯ</b>\n\n"
-        "Евгений, твой уровень - <b>IRON⚙️</b>\n"
+        f"{display_name}, твой уровень - <b>IRON⚙️</b>\n"
         "Номер карты: <b>4821</b>\n\n"
         "Всего визитов: <b>0</b>\n"
         "До <b>BRONZE🥉</b> осталось: <b>3 визита</b>\n\n"
@@ -155,11 +156,22 @@ def send_main_menu(chat_id: int) -> None:
         )
 
 
-def send_level_menu(chat_id: int, user_id: int | None) -> None:
+def user_display_name(user: telebot.types.User | None) -> str:
+    if user is None:
+        return "Гость"
+    if user.first_name:
+        return escape(user.first_name)
+    if user.username:
+        return escape(user.username)
+    return "Гость"
+
+
+def send_level_menu(chat_id: int, user: telebot.types.User | None, user_id: int | None) -> None:
+    display_name = user_display_name(user)
     if user_id is not None and is_registered(user_id):
         bot.send_message(
             chat_id,
-            guest_card_text(),
+            guest_card_text(display_name),
             reply_markup=guest_card_registered_inline_keyboard(),
         )
         return
@@ -203,7 +215,7 @@ def handle_start(message: telebot.types.Message) -> None:
 @bot.message_handler(commands=["level"])
 def handle_level_command(message: telebot.types.Message) -> None:
     user_id = message.from_user.id if message.from_user else None
-    send_level_menu(message.chat.id, user_id)
+    send_level_menu(message.chat.id, message.from_user, user_id)
 
 
 @bot.message_handler(commands=["menu"])
@@ -226,7 +238,7 @@ def handle_guest_card(call: telebot.types.CallbackQuery) -> None:
     if call.message is None:
         return
     user_id = call.from_user.id if call.from_user else None
-    send_level_menu(call.message.chat.id, user_id)
+    send_level_menu(call.message.chat.id, call.from_user, user_id)
     bot.answer_callback_query(call.id)
 
 
@@ -280,7 +292,7 @@ def handle_register_card_callback(call: telebot.types.CallbackQuery) -> None:
     )
     bot.send_message(
         call.message.chat.id,
-        guest_card_text(),
+        guest_card_text(user_display_name(call.from_user)),
         reply_markup=guest_card_registered_inline_keyboard(),
     )
     bot.answer_callback_query(call.id)
