@@ -446,7 +446,12 @@ def location_inline_keyboard() -> InlineKeyboardMarkup:
     return keyboard
 
 
-def menu_inline_keyboard(*, active: str | None = None, tea_active: str | None = None) -> InlineKeyboardMarkup:
+def menu_inline_keyboard(
+    *,
+    active: str | None = None,
+    tea_active: str | None = None,
+    drinks_rules: bool = False,
+) -> InlineKeyboardMarkup:
     keyboard = InlineKeyboardMarkup()
 
     class _StyledInlineButton:
@@ -478,6 +483,14 @@ def menu_inline_keyboard(*, active: str | None = None, tea_active: str | None = 
         keyboard.row(_tea_btn("Сенча", "sencha"), _tea_btn("Молочный улун", "milky_oolong"))
         keyboard.row(_tea_btn("Дянь хун", "dian_hong"), _tea_btn("Пуэр шу", "puer_shu"))
         keyboard.row(_tea_btn("Те Гуань Инь", "tieguanyin"))
+
+    # Drinks: reveal rules on tap.
+    if active == "menu_drinks":
+        cb = "menu_drinks_rules"
+        if drinks_rules:
+            keyboard.row(_StyledInlineButton(text="Правила", callback_data=cb, style="primary"))  # type: ignore[arg-type]
+        else:
+            keyboard.row(InlineKeyboardButton(text="Правила", callback_data=cb))
     return keyboard
 
 
@@ -2849,6 +2862,7 @@ def handle_menu(call: telebot.types.CallbackQuery) -> None:
     func=lambda call: (
         (call.data in {"menu_hookah", "menu_tea", "menu_drinks", "menu_food", "menu_watch"})
         or (isinstance(call.data, str) and call.data.startswith("menu_tea_item:"))
+        or (call.data == "menu_drinks_rules")
     )
 )
 def handle_menu_sections(call: telebot.types.CallbackQuery) -> None:
@@ -2860,10 +2874,14 @@ def handle_menu_sections(call: telebot.types.CallbackQuery) -> None:
 
     raw = call.data or ""
     tea_key: str | None = None
+    drinks_rules = False
     section_cb = raw
     if isinstance(raw, str) and raw.startswith("menu_tea_item:"):
         section_cb = "menu_tea"
         tea_key = raw.split(":", 1)[1].strip() or None
+    if raw == "menu_drinks_rules":
+        section_cb = "menu_drinks"
+        drinks_rules = True
 
     TEA_ITEMS: dict[str, tuple[str, str]] = {
         "sencha": (
@@ -2913,7 +2931,7 @@ def handle_menu_sections(call: telebot.types.CallbackQuery) -> None:
             "Апельсин-имбирь"
         )
 
-    def _text(cb: str, *, tea: str | None) -> str:
+    def _text(cb: str, *, tea: str | None, show_drinks_rules: bool) -> str:
         if cb == "menu_hookah":
             return (
                 "До 17:00 - 1 000₽\n"
@@ -2931,13 +2949,41 @@ def handle_menu_sections(call: telebot.types.CallbackQuery) -> None:
         if cb == "menu_food":
             return "Со своей едой - можно\n\nГолодными не оставим, подскажем быструю доставку🚚"
         if cb == "menu_drinks":
-            return "Раздел «Напитки» находится в разработке 🚧"
+            base = (
+                "БЕЗАЛКОГОЛЬНЫЕ НАПИТКИ\n"
+                "• Red Bull 355мл - 300₽\n"
+                "• Coca-Cola 330мл - 220₽\n\n"
+                "МОРСЫ (домашние)\n"
+                "250мл - 120₽\n"
+                "• Облепиха\n"
+                "• Клюква\n"
+                "• Брусника\n\n"
+                "АВТОРСКИЕ ЛИМОНАДЫ\n"
+                "400мл - 290₽\n"
+                "1л - 550₽\n"
+                "• Клубника - лемонграсс\n"
+                "• Груша - персик - юдзу\n"
+                "• Манго - маракуйя\n"
+                "• Мохито классик"
+            )
+            if not show_drinks_rules:
+                return base
+            rules = (
+                "К нам нельзя со своими безалкогольными напитками\n\n"
+                "Мы предоставляем всё необходимое для комфортного распития: бокалы, лёд, штопор.\n\n"
+                "Пробковый сбор за алкогольный напиток:\n"
+                "Пиво, сидр, медовуха - 100 руб/бут\n"
+                "Вино, шампанское - 300 руб/бут\n"
+                "Крепкий алкоголь (от 20%) - 500 руб/бут\n\n"
+                "Гость несёт ответственность за порчу имущества заведения На Грани"
+            )
+            return f"{base}\n\n{rules}"
         if cb == "menu_watch":
             return "Раздел «Интерьер» находится в разработке 🚧"
         return "Выбери раздел меню:"
 
-    text = _text(section_cb, tea=tea_key)
-    kb = menu_inline_keyboard(active=section_cb, tea_active=tea_key)
+    text = _text(section_cb, tea=tea_key, show_drinks_rules=drinks_rules)
+    kb = menu_inline_keyboard(active=section_cb, tea_active=tea_key, drinks_rules=drinks_rules)
 
     try:
         bot.edit_message_text(
