@@ -463,11 +463,9 @@ def menu_inline_keyboard(*, active: str | None = None) -> InlineKeyboardMarkup:
             return _StyledInlineButton(text=text, callback_data=cb, style="primary")  # type: ignore[return-value]
         return InlineKeyboardButton(text=text, callback_data=cb)
 
-    keyboard.row(_tab("💨 Подымить", "menu_hookah"))
-    keyboard.row(_tab("🍸 Попить", "menu_drinks"))
-    keyboard.row(_tab("🍽 Поесть", "menu_food"))
-    keyboard.row(_tab("👀 Посмотреть", "menu_watch"))
-    keyboard.row(InlineKeyboardButton(text="👈Назад", callback_data="back_to_main"))
+    keyboard.row(_tab("💨 Кальян", "menu_hookah"), _tab("🍵 Чай", "menu_tea"))
+    keyboard.row(_tab("🥤 Напитки", "menu_drinks"), _tab("🍽 Еда", "menu_food"))
+    keyboard.row(InlineKeyboardButton(text="👈 Назад", callback_data="back_to_main"), _tab("📸 Интерьер", "menu_watch"))
     return keyboard
 
 
@@ -2830,7 +2828,7 @@ def handle_menu(call: telebot.types.CallbackQuery) -> None:
     send_food_menu(call.message.chat.id)
 
 
-@bot.callback_query_handler(func=lambda call: call.data in {"menu_hookah", "menu_drinks", "menu_food", "menu_watch"})
+@bot.callback_query_handler(func=lambda call: call.data in {"menu_hookah", "menu_tea", "menu_drinks", "menu_food", "menu_watch"})
 def handle_menu_sections(call: telebot.types.CallbackQuery) -> None:
     if not _callback_guard(call):
         return
@@ -2849,12 +2847,14 @@ def handle_menu_sections(call: telebot.types.CallbackQuery) -> None:
                 "Если за столом более четырёх гостей, необходимо заказать 2 кальяна единовременно, если более шести - 3 кальяна\n\n"
                 "С 19:00 действует правило - 2 часа на один кальян"
             )
+        if cb == "menu_tea":
+            return "Раздел «Чай» находится в разработке 🚧"
         if cb == "menu_food":
             return "Со своей едой - можно\n\nГолодными не оставим, подскажем быструю доставку🚚"
         if cb == "menu_drinks":
-            return "Раздел «Попить» находится в разработке 🚧"
+            return "Раздел «Напитки» находится в разработке 🚧"
         if cb == "menu_watch":
-            return "Раздел «Посмотреть» находится в разработке 🚧"
+            return "Раздел «Интерьер» находится в разработке 🚧"
         return "Выбери раздел меню:"
 
     text = _text(section_cb)
