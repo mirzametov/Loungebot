@@ -2806,26 +2806,6 @@ def handle_inline_query(query: telebot.types.InlineQuery) -> None:
         )
     )
 
-    # Preview row with image in the inline list; still sends text-only card on tap.
-    photo_file_id = ensure_inline_photo_file_id()
-    if photo_file_id:
-        try:
-            results.append(
-                telebot.types.InlineQueryResultCachedPhoto(
-                    id=f"levelp:{user_id}",
-                    photo_file_id=photo_file_id,
-                    title=f"🪪 КАРТА LEVEL @{username}",
-                    description="Нажми",
-                    input_message_content=telebot.types.InputTextMessageContent(
-                        msg,
-                        parse_mode="HTML",
-                        disable_web_page_preview=True,
-                    ),
-                )
-            )
-        except Exception:
-            pass
-
     bot.answer_inline_query(query.id, results, cache_time=1, is_personal=True)
     return
 
@@ -2853,12 +2833,6 @@ if __name__ == "__main__":
             except Exception as e:
                 # Commands are optional; polling can still work.
                 log.warning("setMyCommands failed: %s", e)
-
-            # Best-effort cache for inline image (so inline results can show a photo).
-            try:
-                ensure_inline_photo_file_id()
-            except Exception:
-                pass
 
             # Be explicit to ensure inline queries are delivered to the bot.
             log.info("Starting polling (skip_pending=%s)", True)
