@@ -1750,7 +1750,7 @@ def level_visits_text() -> str:
 def level_giveaway_text() -> str:
     bot_username = (os.getenv("BOT_USERNAME", "") or "").strip().lstrip("@")
     pitbike_link = f"https://t.me/{bot_username}?start=pitbike" if bot_username else ""
-    pitbike_word = f'<a href="{pitbike_link}">питбайк</a>' if pitbike_link else "питбайк"
+    pitbike_word = f'<b><a href="{pitbike_link}">питбайк</a></b>' if pitbike_link else "<b>питбайк</b>"
     return (
         "<b>РОЗЫГРЫШ</b>\n\n"
         "В конце года разыгрываем призы среди гостей с картами <b>LEVEL</b> уровня <b>SILVER</b> и <b>GOLD</b>\n\n"
@@ -1880,7 +1880,7 @@ def handle_start(message: telebot.types.Message) -> None:
     except Exception:
         payload = ""
     if payload == "pitbike":
-        send_interior(message.chat.id, idx=3)
+        send_interior(message.chat.id, idx=1)
         return
 
     send_main_menu(message.chat.id, user=message.from_user)
