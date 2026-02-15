@@ -461,6 +461,7 @@ def level_keyboard(*, registered: bool, active: str) -> InlineKeyboardMarkup:
 def location_inline_keyboard() -> InlineKeyboardMarkup:
     keyboard = InlineKeyboardMarkup()
     keyboard.row(InlineKeyboardButton(text="🗺️ Ссылка 2ГИС", url=LOCATION_2GIS_URL))
+    keyboard.row(InlineKeyboardButton(text="📸 Интерьер", callback_data="location_interior"))
     keyboard.row(InlineKeyboardButton(text="🚀 Новости бара", url=NEWS_URL))
     keyboard.row(InlineKeyboardButton(text="🏍 Наш прокат Прохват72", url=PROHVAT72_URL))
     keyboard.row(InlineKeyboardButton(text="🏁 Наши гонки На грани", url=RACES_URL))
@@ -491,7 +492,7 @@ def menu_inline_keyboard(
 
     keyboard.row(_tab("💨 Кальян", "menu_hookah"), _tab("🍵 Чай", "menu_tea"))
     keyboard.row(_tab("🥤 Напитки", "menu_drinks"), _tab("🍽 Еда", "menu_food"))
-    keyboard.row(InlineKeyboardButton(text="👈 Назад", callback_data="back_to_main"), _tab("📸 Интерьер", "menu_watch"))
+    keyboard.row(InlineKeyboardButton(text="👈 Назад", callback_data="back_to_main"), _tab("Правила", "menu_rules"))
 
     # Drinks: reveal rules on tap.
     if active == "menu_drinks":
@@ -2844,6 +2845,20 @@ def handle_location(call: telebot.types.CallbackQuery) -> None:
         return
     send_location_menu(call.message.chat.id)
 
+
+@bot.callback_query_handler(func=lambda call: call.data == "location_interior")
+def handle_location_interior(call: telebot.types.CallbackQuery) -> None:
+    if not _callback_guard(call):
+        return
+    if call.message is None:
+        return
+    bot.send_message(
+        call.message.chat.id,
+        "Раздел «Интерьер» находится в разработке 🚧",
+        reply_markup=location_inline_keyboard(),
+        disable_web_page_preview=True,
+    )
+
 @bot.callback_query_handler(func=lambda call: call.data == "main_add_visit")
 def handle_main_add_visit(call: telebot.types.CallbackQuery) -> None:
     if not _callback_guard(call):
@@ -2876,7 +2891,7 @@ def handle_menu(call: telebot.types.CallbackQuery) -> None:
 
 @bot.callback_query_handler(
     func=lambda call: (
-        (call.data in {"menu_hookah", "menu_tea", "menu_drinks", "menu_food", "menu_watch"})
+        (call.data in {"menu_hookah", "menu_tea", "menu_drinks", "menu_food", "menu_watch", "menu_rules"})
         or (call.data == "menu_drinks_rules")
     )
 )
@@ -2963,6 +2978,17 @@ def handle_menu_sections(call: telebot.types.CallbackQuery) -> None:
                 "Гость несёт ответственность за порчу имущества заведения На Грани"
             )
             return f"{base}\n\n{rules}"
+        if cb == "menu_rules":
+            return (
+                "<b>Правила</b>\n\n"
+                "К нам нельзя со своими безалкогольными напитками.\n\n"
+                "Мы предоставляем всё необходимое для комфортного распития: бокалы, лёд, штопор.\n\n"
+                "<b>Пробковый сбор за алкогольный напиток:</b>\n"
+                "Пиво, сидр, медовуха - 100 руб/бут\n"
+                "Вино, шампанское - 300 руб/бут\n"
+                "Крепкий алкоголь (от 20%) - 500 руб/бут\n\n"
+                "Гость несёт ответственность за порчу имущества заведения На Грани"
+            )
         if cb == "menu_watch":
             return "Раздел «Интерьер» находится в разработке 🚧"
         return "Выбери раздел меню:"
