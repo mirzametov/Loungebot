@@ -446,12 +446,27 @@ def location_inline_keyboard() -> InlineKeyboardMarkup:
     return keyboard
 
 
-def menu_inline_keyboard() -> InlineKeyboardMarkup:
+def menu_inline_keyboard(*, active: str | None = None) -> InlineKeyboardMarkup:
     keyboard = InlineKeyboardMarkup()
-    keyboard.row(InlineKeyboardButton(text="💨 Подымить", callback_data="menu_hookah"))
-    keyboard.row(InlineKeyboardButton(text="🍸 Выпить", callback_data="menu_drinks"))
-    keyboard.row(InlineKeyboardButton(text="🍽 Поесть", callback_data="menu_food"))
-    keyboard.row(InlineKeyboardButton(text="👀 Посмотреть", callback_data="menu_watch"))
+
+    class _StyledInlineButton:
+        def __init__(self, *, text: str, callback_data: str, style: str) -> None:
+            self.text = text
+            self.callback_data = callback_data
+            self.style = style
+
+        def to_dict(self) -> dict:
+            return {"text": self.text, "callback_data": self.callback_data, "style": self.style}
+
+    def _tab(text: str, cb: str) -> InlineKeyboardButton:
+        if active and cb == active:
+            return _StyledInlineButton(text=text, callback_data=cb, style="primary")  # type: ignore[return-value]
+        return InlineKeyboardButton(text=text, callback_data=cb)
+
+    keyboard.row(_tab("💨 Подымить", "menu_hookah"))
+    keyboard.row(_tab("🍸 Попить", "menu_drinks"))
+    keyboard.row(_tab("🍽 Поесть", "menu_food"))
+    keyboard.row(_tab("👀 Посмотреть", "menu_watch"))
     keyboard.row(InlineKeyboardButton(text="👈Назад", callback_data="back_to_main"))
     return keyboard
 
@@ -1755,7 +1770,7 @@ def send_food_menu(chat_id: int) -> None:
     bot.send_message(
         chat_id,
         "Выбери раздел меню:",
-        reply_markup=menu_inline_keyboard(),
+        reply_markup=menu_inline_keyboard(active=None),
     )
 
 
@@ -2820,39 +2835,41 @@ def handle_menu_sections(call: telebot.types.CallbackQuery) -> None:
     if not _callback_guard(call):
         return
 
-    if call.data == "menu_hookah":
-        bot.send_message(
-            call.message.chat.id,
-            "До 17:00 - 1 000₽\n"
-            "После 17:00 - 1 400₽\n\n"
-            "Соберём вкус и крепость под тебя. Работаем на премиальных табаках.\n\n"
-            "Если за столом более четырёх гостей, необходимо заказать 2 кальяна единовременно, если более шести - 3 кальяна\n\n"
-            "С 19:00 действует правило - 2 часа на один кальян",
-            reply_markup=menu_inline_keyboard(),
-        )
+    if call.message is None:
         return
 
-    if call.data == "menu_food":
-        bot.send_message(
-            call.message.chat.id,
-            "Со своей едой - можно\n\n"
-            "Голодными не оставим, подскажем быструю доставку🚚",
-            reply_markup=menu_inline_keyboard(),
-        )
-        return
+    section_cb = call.data
 
-    label_map = {
-        "menu_hookah": "Кальяны",
-        "menu_drinks": "Выпивка",
-        "menu_food": "Еда",
-        "menu_watch": "Посмотреть",
-    }
-    section = label_map[call.data]
-    bot.send_message(
-        call.message.chat.id,
-        f"Раздел «{section}» находится в разработке 🚧",
-        reply_markup=menu_inline_keyboard(),
-    )
+    def _text(cb: str) -> str:
+        if cb == "menu_hookah":
+            return (
+                "До 17:00 - 1 000₽\n"
+                "После 17:00 - 1 400₽\n\n"
+                "Соберём вкус и крепость под тебя. Работаем на премиальных табаках.\n\n"
+                "Если за столом более четырёх гостей, необходимо заказать 2 кальяна единовременно, если более шести - 3 кальяна\n\n"
+                "С 19:00 действует правило - 2 часа на один кальян"
+            )
+        if cb == "menu_food":
+            return "Со своей едой - можно\n\nГолодными не оставим, подскажем быструю доставку🚚"
+        if cb == "menu_drinks":
+            return "Раздел «Попить» находится в разработке 🚧"
+        if cb == "menu_watch":
+            return "Раздел «Посмотреть» находится в разработке 🚧"
+        return "Выбери раздел меню:"
+
+    text = _text(section_cb)
+    kb = menu_inline_keyboard(active=section_cb)
+
+    try:
+        bot.edit_message_text(
+            text,
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            reply_markup=kb,
+            disable_web_page_preview=True,
+        )
+    except Exception:
+        bot.send_message(call.message.chat.id, text, reply_markup=kb, disable_web_page_preview=True)
 
 
 @bot.callback_query_handler(func=lambda call: call.data == "register_card")
