@@ -1748,10 +1748,13 @@ def level_visits_text() -> str:
 
 
 def level_giveaway_text() -> str:
+    bot_username = (os.getenv("BOT_USERNAME", "") or "").strip().lstrip("@")
+    pitbike_link = f"https://t.me/{bot_username}?start=pitbike" if bot_username else ""
+    pitbike_word = f'<a href="{pitbike_link}">питбайк</a>' if pitbike_link else "питбайк"
     return (
         "<b>Розыгрыш</b>\n\n"
         "В конце года разыгрываем призы среди гостей с картами <b>LEVEL</b> уровня <b>SILVER</b> и <b>GOLD</b>\n\n"
-        "🥇 Тот самый питбайк\n"
+        f"🥇 Тот самый {pitbike_word}\n"
         f"🥈 Сертификат <b><a href=\"{PROHVAT72_URL}\">Прохват72</a></b>\n"
         f"🥉 Сертификат <b><a href=\"{NEWS_URL}\">На Грани Lounge</a></b>\n\n"
         "Повышай уровень и участвуй в розыгрыше"
@@ -1870,6 +1873,16 @@ def handle_start(message: telebot.types.Message) -> None:
     if not _message_guard(message):
         return
     log.info("cmd /start from user_id=%s chat_id=%s", getattr(message.from_user, "id", None), message.chat.id)
+
+    # Deep-link: open the interior gallery on the pitbike photo.
+    try:
+        payload = (message.text or "").split(maxsplit=1)[1].strip()
+    except Exception:
+        payload = ""
+    if payload == "pitbike":
+        send_interior(message.chat.id, idx=3)
+        return
+
     send_main_menu(message.chat.id, user=message.from_user)
 
 
