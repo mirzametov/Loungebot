@@ -1752,7 +1752,7 @@ def level_giveaway_text() -> str:
     pitbike_link = f"https://t.me/{bot_username}?start=pitbike" if bot_username else ""
     pitbike_word = f'<a href="{pitbike_link}">питбайк</a>' if pitbike_link else "питбайк"
     return (
-        "<b>Розыгрыш</b>\n\n"
+        "<b>РОЗЫГРЫШ</b>\n\n"
         "В конце года разыгрываем призы среди гостей с картами <b>LEVEL</b> уровня <b>SILVER</b> и <b>GOLD</b>\n\n"
         f"🥇 Тот самый {pitbike_word}\n"
         f"🥈 Сертификат <b><a href=\"{PROHVAT72_URL}\">Прохват72</a></b>\n"
@@ -1817,7 +1817,7 @@ def level_rating_text(*, superadmin: bool) -> str:
         return f"{prefix} - <b>{escape(str(label))}</b>"
 
     lines: list[str] = []
-    lines.append("<b>🏆 Рейтинг гостей</b>")
+    lines.append("<b>🏆 РЕЙТИНГ ГОСТЕЙ</b>")
     lines.append("")
     lines.append(f"Топ по визитам за <b>{escape(m_nom)}</b> в баре")
     if now < LAUNCH:
