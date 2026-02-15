@@ -321,26 +321,13 @@ def is_superadmin(user_id: int | None) -> bool:
     return int(user_id) in ids
 
 
-def _menu_owner_id() -> int:
-    """
-    Temporary safety switch: allow menu only for one owner user_id.
-    """
-    raw = os.getenv("MENU_OWNER_ID", "").strip()
-    if raw:
-        try:
-            return int(raw)
-        except Exception:
-            pass
-    return 864921585
-
-
 def is_menu_allowed(user_id: int | None) -> bool:
-    if user_id is None:
-        return False
-    try:
-        return int(user_id) == _menu_owner_id()
-    except Exception:
-        return False
+    """
+    Menu is open for everyone by default.
+    If you need to lock it again: set MENU_LOCKED=1 in env.
+    """
+    locked = (os.getenv("MENU_LOCKED", "") or "").strip() in {"1", "true", "True", "yes", "YES"}
+    return not locked
 
 
 def _tg_user_link(user_id: int, username: str | None = None) -> str:
