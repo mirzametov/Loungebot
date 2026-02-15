@@ -2971,7 +2971,6 @@ def handle_menu_sections(call: telebot.types.CallbackQuery) -> None:
             return f"{base}\n\n{rules}"
         if cb == "menu_rules":
             return (
-                "<b>Правила</b>\n\n"
                 "Мы предоставляем всё необходимое для комфортного распития: бокалы, лёд, штопор.\n\n"
                 "<b>Пробковый сбор за алкогольный напиток:</b>\n"
                 "Пиво, сидр, медовуха - <b>100 руб/бут</b>\n"
