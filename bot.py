@@ -1785,7 +1785,7 @@ def handle_admin_stats(call: telebot.types.CallbackQuery) -> None:
             c_iron += 1
 
     lines.append("")
-    lines.append(f"🪪 Выдано карт <b>LEVEL</b>")
+    lines.append("🪪 <b>Выдано карт</b> <b>LEVEL</b>")
     lines.append(f"<b>⚙️ IRON: {c_iron}</b>")
     lines.append(f"<b>🥉 BRONZE: {c_bronze}</b>")
     lines.append(f"<b>🥈 SILVER: {c_silver}</b>")
