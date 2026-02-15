@@ -480,9 +480,9 @@ def interior_keyboard(idx: int) -> InlineKeyboardMarkup:
 
     # Navigation row
     if i == 1:
-        kb.row(InlineKeyboardButton(text="Следующая", callback_data="interior:2"))
+        kb.row(InlineKeyboardButton(text="Следующая ➡️", callback_data="interior:2"))
     elif i == INTERIOR_COUNT:
-        kb.row(InlineKeyboardButton(text="Предыдущая", callback_data=f"interior:{INTERIOR_COUNT - 1}"))
+        kb.row(InlineKeyboardButton(text="⬅️ Предыдущая", callback_data=f"interior:{INTERIOR_COUNT - 1}"))
     else:
         kb.row(
             InlineKeyboardButton(text="⬅️", callback_data=f"interior:{i - 1}"),
