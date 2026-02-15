@@ -68,6 +68,7 @@ from loungebot.level_cards import (
     list_cards,
     next_tier_info,
     set_staff_gold_by_user_id,
+    tier_for_visits,
 )
 from loungebot.keyboards import (
     BTN_BOOKING,
@@ -1758,6 +1759,37 @@ def handle_admin_stats(call: telebot.types.CallbackQuery) -> None:
     lines.append(f"Подписались за сегодня: <b>{subs_today}</b>")
     lines.append(f"Подписались за 7 дней: <b>{subs_7}</b>")
     lines.append(f"Подписались за 30 дней: <b>{subs_30}</b>")
+
+    # Cards issued by LEVEL tier (computed from current visits/staff flag).
+    cards = list_cards()
+    total_cards = len(cards)
+    c_iron = 0
+    c_bronze = 0
+    c_silver = 0
+    c_gold = 0
+    for c in cards:
+        try:
+            if bool(getattr(c, "staff_gold", False)):
+                lvl = "GOLD🥇"
+            else:
+                lvl, _disc = tier_for_visits(int(getattr(c, "visits", 0) or 0))
+        except Exception:
+            lvl = "IRON⚙️"
+        if str(lvl).startswith("GOLD"):
+            c_gold += 1
+        elif str(lvl).startswith("SILVER"):
+            c_silver += 1
+        elif str(lvl).startswith("BRONZE"):
+            c_bronze += 1
+        else:
+            c_iron += 1
+
+    lines.append("")
+    lines.append(f"🪪 Карты LEVEL выдано: <b>{total_cards}</b>")
+    lines.append(f"⚙️ IRON: <b>{c_iron}</b>")
+    lines.append(f"🥉 BRONZE: <b>{c_bronze}</b>")
+    lines.append(f"🥈 SILVER: <b>{c_silver}</b>")
+    lines.append(f"🥇 GOLD: <b>{c_gold}</b>")
     lines.append("")
     lines.append("<b>Топ подписчиков по кликам (ТОП-10)</b>")
 
