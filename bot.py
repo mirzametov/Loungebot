@@ -1,8 +1,11 @@
 import os
+import json
 from html import escape
 from pathlib import Path
 from urllib.parse import quote
 import time
+import logging
+import sys
 
 import telebot
 from dotenv import load_dotenv
@@ -13,10 +16,13 @@ from telebot.types import (
 )
 
 import re
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from loungebot.admin_stats import (
     UserInfo,
     active_subscribers_count,
+    active_user_ids,
     admin_marked_recent_clients,
     admin_marked_visits_counts,
     admin_marked_visits_summary,
@@ -30,6 +36,12 @@ from loungebot.admin_stats import (
     top_admins_by_marked_visits,
     touch_user,
     unsubscribed_counts,
+    filter_user_ids_by_broadcast_cooldown,
+    record_broadcast_sent,
+    top_users_by_visits_in_month,
+    users_no_visits_between_days,
+    users_no_visits_for_days,
+    users_last_visit_older_than_days,
     visit_counts,
     user_visit_counts,
     add_visit_marked,
@@ -37,6 +49,7 @@ from loungebot.admin_stats import (
 )
 from loungebot.admin_roles import (
     add_admin_by_username,
+    admin_user_ids,
     is_admin_user,
     list_admins,
     normalize_username,
@@ -46,13 +59,15 @@ from loungebot.admin_roles import (
 from loungebot.guest_cards import is_registered, register_card
 from loungebot.level_cards import (
     add_visit_by_user_id,
+    clear_staff_gold_by_user_id,
     ensure_level_card,
     find_card_by_number,
     find_card_by_user_id,
+    list_cards,
     next_tier_info,
+    set_staff_gold_by_user_id,
 )
 from loungebot.keyboards import (
-    BTN_BACK,
     BTN_BOOKING,
     BTN_GUEST_CARD,
     BTN_LOCATION,
@@ -60,31 +75,233 @@ from loungebot.keyboards import (
     BTN_REGISTER_CARD,
 )
 
+LOG_PATH = Path(__file__).with_name("bot.log")
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    handlers=[
+        logging.FileHandler(LOG_PATH, encoding="utf-8"),
+        logging.StreamHandler(sys.stdout),
+    ],
+)
+log = logging.getLogger("loungebot")
+
+_BONUS_BY_PLACE = {1: 10, 2: 6, 3: 3}  # extra % for winners in the next month
+_MEDAL_BY_PLACE = {1: "🥇", 2: "🥈", 3: "🥉"}
+
+# Inline-mode image (cached photo file_id in Telegram).
+_inline_photo_file_id: str | None = None
+
+
+def _tyumen_now() -> datetime:
+    try:
+        return datetime.now(ZoneInfo("Asia/Tyumen"))
+    except Exception:
+        return datetime.now().astimezone()
+
+
+def _prev_month(dt: datetime) -> tuple[int, int]:
+    y = int(dt.year)
+    m = int(dt.month)
+    if m == 1:
+        return (y - 1, 12)
+    return (y, m - 1)
+
+
+def _monthly_bonus_map_for_prev_month(now: datetime) -> dict[int, int]:
+    """
+    Bonus is granted in the current month based on previous month's leaderboard.
+    Starts from March 2026 leaderboard (bonuses begin in April 2026).
+    """
+    prev_y, prev_m = _prev_month(now)
+    if (prev_y, prev_m) < (2026, 3):
+        return {}
+
+    rows = top_users_by_visits_in_month(prev_y, prev_m, source=BOT_SOURCE, limit=3, active_only=False)
+    out: dict[int, int] = {}
+    place = 0
+    for row in rows:
+        try:
+            uid = int(row.get("user_id") or 0)
+        except Exception:
+            continue
+        if not is_eligible_for_competitions(uid):
+            continue
+        place += 1
+        out[uid] = int(_BONUS_BY_PLACE.get(place, 0))
+        if place >= 3:
+            break
+    return out
+
+
+def is_eligible_for_competitions(user_id: int | None) -> bool:
+    """
+    Staff accounts do not participate in ratings/competitions (and future contests).
+    """
+    if user_id is None:
+        return False
+    try:
+        uid = int(user_id)
+    except Exception:
+        return False
+    return uid not in _staff_user_ids_known()
+
+
+def _staff_level_label(user_id: int | None, username: str | None = None) -> str | None:
+    """
+    Returns special LEVEL label overrides for staff accounts, otherwise None.
+    - ADMIN -> 'ADMIN🐧' (penguin)
+    - SUPERADMIN -> 'SUPERADMIN🥷'
+    """
+    if user_id is None:
+        return None
+    uid = int(user_id)
+    uname = normalize_username(username or "") if username else None
+    if is_superadmin(uid):
+        return "SUPERADMIN🥷"
+    try:
+        if is_admin_user(uid, uname):
+            return "ADMIN🐧"
+    except Exception:
+        pass
+    return None
+
+
+def _iter_months_inclusive(start_y: int, start_m: int, end_y: int, end_m: int):
+    """
+    Yields (y, m) months from start to end inclusive.
+    """
+    y, m = int(start_y), int(start_m)
+    while (y, m) <= (int(end_y), int(end_m)):
+        yield (y, m)
+        if m == 12:
+            y += 1
+            m = 1
+        else:
+            m += 1
+
+
+def medals_for_user(user_id: int | None) -> str:
+    """
+    Returns medal emojis in chronological order of months earned.
+    Only uses completed months (previous month and earlier).
+    Launch: March 2026.
+    """
+    if user_id is None:
+        return ""
+    uid = int(user_id)
+    if not is_eligible_for_competitions(uid):
+        return ""
+
+    now = _tyumen_now()
+    # Completed month range ends at previous month.
+    end_y, end_m = _prev_month(now)
+    if (end_y, end_m) < (2026, 3):
+        return ""
+
+    staff = _staff_user_ids_known()
+    medals: list[str] = []
+    for y, m in _iter_months_inclusive(2026, 3, end_y, end_m):
+        rows = top_users_by_visits_in_month(y, m, source=BOT_SOURCE, limit=3, active_only=False)
+        place = 0
+        for row in rows:
+            try:
+                ruid = int(row.get("user_id") or 0)
+            except Exception:
+                continue
+            if not ruid or ruid in staff:
+                continue
+            place += 1
+            if ruid == uid:
+                em = _MEDAL_BY_PLACE.get(place)
+                if em:
+                    medals.append(em)
+            if place >= 3:
+                break
+
+    return "".join(medals)
+
+
+def bonus_discount_for_user(user_id: int | None) -> int:
+    """
+    Extra discount percent for current month (based on previous month results).
+    """
+    if user_id is None:
+        return 0
+    uid = int(user_id)
+    if not is_eligible_for_competitions(uid):
+        return 0
+    now = _tyumen_now()
+    m = _monthly_bonus_map_for_prev_month(now)
+    return int(m.get(uid, 0))
+
+
+def total_discount_for_user(user_id: int | None, base_discount: int) -> tuple[int, int]:
+    bonus = bonus_discount_for_user(user_id)
+    total = int(base_discount) + int(bonus)
+    return (total, bonus)
+
 
 def guest_card_text(display_name: str, *, user_id: int | None = None) -> str:
     card = find_card_by_user_id(int(user_id)) if user_id is not None else None
     level_label = card.level if card else "IRON⚙️"
     card_number = card.card_number if card else "4821"
-    discount = card.discount if card else 3
+    base_discount = card.discount if card else 3
+    total_discount, bonus_discount = total_discount_for_user(user_id, base_discount)
     total_visits = card.visits if card else 0
-    next_info = next_tier_info(total_visits) if card else ("BRONZE🥉", 5)
-    if next_info is None:
-        next_line = "Максимальный уровень\n\n"
+
+    lvl_override = _staff_level_label(user_id, (card.username if card else None))
+    if lvl_override:
+        level_label = lvl_override
+
+    if user_id is not None and is_superadmin(int(user_id)):
+        header_line = f"Твой уровень: <b>{escape(level_label)}</b>"
     else:
-        next_level, remain = next_info
-        next_line = f"До <b>{escape(next_level)}</b> осталось: <b>{remain} визитов</b>\n\n"
+        header_line = f"{display_name}, твой уровень: <b>{escape(level_label)}</b>"
+
+    # Don't show "next tier" line for GOLD.
+    progress_line = ""
+    if lvl_override:
+        progress_line = ""
+    elif card and not str(level_label).startswith("GOLD"):
+        next_info = next_tier_info(total_visits)
+        if next_info is not None:
+            next_level, remain = next_info
+            progress_line = f"До <b>{escape(next_level)}</b> осталось: <b>{remain} визитов</b>"
+    elif card is None:
+        # Unregistered fallback copy.
+        progress_line = "До <b>BRONZE🥉</b> осталось: <b>5 визитов</b>"
+
+    if bonus_discount > 0:
+        discount_line = (
+            f"Скидка: <b>{base_discount}%</b>, плюс <b>{bonus_discount}%</b>\n"
+            f"Общая скидка: <b>{total_discount}%</b>"
+        )
+    else:
+        discount_line = f"Скидка: <b>{base_discount}%</b>"
+
+    medals = medals_for_user(user_id)
+    medals_line = f"Всего медалей: {medals}" if medals else ""
+
+    # After card number: blank line, then 3 lines подряд (visits, discount, progress).
+    mid_lines = [
+        f"Всего визитов: <b>{total_visits}</b>",
+        discount_line,
+    ]
+    if progress_line:
+        mid_lines.append(progress_line)
+
     return (
         "<b>КАРТА LEVEL</b>\n\n"
-        f"{display_name}, твой уровень - <b>{escape(level_label)}</b>\n"
-        f"Номер карты: <b>{escape(card_number)}</b>\n\n"
-        f"Всего визитов: <b>{total_visits}</b>\n"
-        f"{next_line}"
+        f"{header_line}\n"
+        f"Номер карты: <b>{escape(card_number)}</b>\n"
+        "\n"
+        + "\n".join(mid_lines)
+        + (f"\n{medals_line}" if medals_line else "")
+        + "\n\n"
         "Твой уровень даёт:\n"
-        f"• скидка <b>{discount}%</b> на меню <b><a href=\"https://t.me/nagrani_lounge\">Lounge</a></b>\n"
-        f"• скидка <b>{discount}%</b> на <b><a href=\"https://t.me/prohvat72\">Прохват72</a></b>\n\n"
-        "Назови номер карты администратору,\n"
-        "чтобы засчитать визит по карте level\n"
-        "и применить скидку."
+        f"• скидка <b>{total_discount}%</b> на меню <b><a href=\"https://t.me/nagrani_lounge\">Lounge</a></b>\n"
+        f"• скидка <b>{total_discount}%</b> на <b><a href=\"https://t.me/prohvat72\">Прохват72</a></b>\n"
     )
 
 def is_superadmin(user_id: int | None) -> bool:
@@ -137,6 +354,15 @@ def _is_staff(user: telebot.types.User | None) -> bool:
     return _is_admin(user)
 
 
+def _is_staff_user_id(user_id: int, username: str | None) -> bool:
+    if is_superadmin(user_id):
+        return True
+    try:
+        return is_admin_user(user_id, username)
+    except Exception:
+        return False
+
+
 def main_inline_keyboard(*, superadmin: bool, admin: bool) -> InlineKeyboardMarkup:
     # "admin" here means non-superadmin staff account.
     # Superadmins keep the admin menu button as-is.
@@ -148,7 +374,7 @@ def main_inline_keyboard(*, superadmin: bool, admin: bool) -> InlineKeyboardMark
     if superadmin:
         keyboard.row(
             InlineKeyboardButton(
-                text=f"👀 Супер-админ {active_subscribers_count()}",
+                text=f"👀 SuperAdmin {active_subscribers_count()}",
                 callback_data="main_admin",
             )
         )
@@ -169,22 +395,40 @@ def main_inline_keyboard(*, superadmin: bool, admin: bool) -> InlineKeyboardMark
 
 
 def guest_card_inline_keyboard() -> InlineKeyboardMarkup:
+    # For new users: only registration button (no tabs yet).
     keyboard = InlineKeyboardMarkup()
-    keyboard.row(
-        InlineKeyboardButton(text=BTN_REGISTER_CARD, callback_data="register_card"),
-    )
-    keyboard.row(
-        InlineKeyboardButton(text=BTN_BACK, callback_data="back_to_main"),
-        InlineKeyboardButton(text="🧾 О визитах", callback_data="level_info"),
-    )
+    keyboard.row(InlineKeyboardButton(text=BTN_REGISTER_CARD, callback_data="register_card"))
     return keyboard
 
 
 def guest_card_registered_inline_keyboard() -> InlineKeyboardMarkup:
+    return level_keyboard(registered=True, active="card")
+
+
+def level_keyboard(*, registered: bool, active: str) -> InlineKeyboardMarkup:
     keyboard = InlineKeyboardMarkup()
+
+    class _StyledInlineButton:
+        def __init__(self, *, text: str, callback_data: str, style: str) -> None:
+            self.text = text
+            self.callback_data = callback_data
+            self.style = style
+
+        def to_dict(self) -> dict:
+            return {"text": self.text, "callback_data": self.callback_data, "style": self.style}
+
+    def _tab(text: str, tab: str) -> InlineKeyboardButton:
+        if tab == active:
+            return _StyledInlineButton(text=text, callback_data=f"level_tab:{tab}", style="primary")  # type: ignore[return-value]
+        return InlineKeyboardButton(text=text, callback_data=f"level_tab:{tab}")
+
+    if not registered:
+        keyboard.row(InlineKeyboardButton(text=BTN_REGISTER_CARD, callback_data="register_card"))
+
+    keyboard.row(_tab("🪪 Карта LEVEL", "card"), _tab("🏆 Рейтинг", "rating"))
     keyboard.row(
-        InlineKeyboardButton(text=BTN_BACK, callback_data="back_to_main"),
-        InlineKeyboardButton(text="🧾 О визитах", callback_data="level_info"),
+        InlineKeyboardButton(text="🏠 Домой", callback_data="back_to_main"),
+        _tab("ℹ️ Инфо", "visits"),
     )
     return keyboard
 
@@ -194,7 +438,7 @@ def location_inline_keyboard() -> InlineKeyboardMarkup:
     keyboard.row(InlineKeyboardButton(text="🗺️ Ссылка 2ГИС", url=LOCATION_2GIS_URL))
     keyboard.row(InlineKeyboardButton(text="🚀 Новости бара", url=NEWS_URL))
     keyboard.row(InlineKeyboardButton(text="🏍 Наш прокат Прохват72", url=PROHVAT72_URL))
-    keyboard.row(InlineKeyboardButton(text="🏁 Наши гонеи На грани", url=RACES_URL))
+    keyboard.row(InlineKeyboardButton(text="🏁 Наши гонки На грани", url=RACES_URL))
     keyboard.row(InlineKeyboardButton(text="👈Назад", callback_data="back_to_main"))
     return keyboard
 
@@ -226,6 +470,8 @@ def admin_menu_keyboard() -> InlineKeyboardMarkup:
     keyboard = InlineKeyboardMarkup()
     keyboard.row(InlineKeyboardButton(text="👥 Управление админами", callback_data="admin_admins"))
     keyboard.row(InlineKeyboardButton(text=f"📊 Статистика {subs}", callback_data="admin_stats"))
+    keyboard.row(InlineKeyboardButton(text="📣 Рассылка", callback_data="admin_broadcast"))
+    keyboard.row(InlineKeyboardButton(text="📚 Правила", callback_data="admin_rules"))
     keyboard.row(InlineKeyboardButton(text="👈Назад", callback_data="back_to_main"))
     return keyboard
 
@@ -239,6 +485,142 @@ def admin_bottom_keyboard(back_cb: str) -> InlineKeyboardMarkup:
     return keyboard
 
 
+def admin_rules_keyboard(active: str) -> InlineKeyboardMarkup:
+    """
+    Small tab buttons (up to 3 in a row) + back/home.
+    """
+    class _StyledInlineButton:
+        def __init__(self, *, text: str, callback_data: str, style: str) -> None:
+            self.text = text
+            self.callback_data = callback_data
+            self.style = style
+
+        def to_dict(self) -> dict:
+            # Telegram Bot API 9.4+: supports "style" for buttons.
+            return {"text": self.text, "callback_data": self.callback_data, "style": self.style}
+
+    keyboard = InlineKeyboardMarkup()
+
+    def _tab(text: str, tab: str) -> InlineKeyboardButton:
+        if tab == active:
+            # Paint the whole button blue (primary).
+            return _StyledInlineButton(text=text, callback_data=f"admin_rules:{tab}", style="primary")  # type: ignore[return-value]
+        return InlineKeyboardButton(text=text, callback_data=f"admin_rules:{tab}")
+
+    tabs: list[InlineKeyboardButton] = [
+        _tab("Баллы", "points"),
+        _tab("Визиты", "visits"),
+        _tab("Рейтинг", "rating"),
+        _tab("Рассылки", "broadcast"),
+        _tab("Билд", "build"),
+    ]
+
+    def _layout(count: int) -> list[int]:
+        # Layout rules:
+        # 1-3 -> one row (count)
+        # 4 -> 2+2
+        # 5 -> 3+2
+        # 6 -> 3+3
+        # 7 -> 3+2+2
+        if count <= 3:
+            return [count]
+        if count == 4:
+            return [2, 2]
+        if count == 5:
+            return [3, 2]
+        if count == 6:
+            return [3, 3]
+        if count == 7:
+            return [3, 2, 2]
+        # Fallback: pack by 3s.
+        full = count // 3
+        rem = count % 3
+        out = [3] * full
+        if rem:
+            out.append(rem)
+        return out
+
+    i = 0
+    for n in _layout(len(tabs)):
+        row = tabs[i : i + n]
+        i += n
+        if row:
+            keyboard.row(*row)
+    keyboard.row(
+        InlineKeyboardButton(text="👈Назад", callback_data="admin_menu"),
+        InlineKeyboardButton(text="🏠 Домой", callback_data="back_to_main"),
+    )
+    return keyboard
+
+
+def admin_rules_text(tab: str) -> str:
+    tab = tab or "points"
+    if tab == "visits":
+        return (
+            "<b>Правила визитов</b>\n\n"
+            "<b>Условия</b>\n"
+            "• чек от <b>1000₽</b>\n\n"
+            "<b>Ограничения</b>\n"
+            "• не чаще <b>1 раза в день</b> (специально обученный админ обновляет счетчик в 6 утра)\n"
+            "• админ не может засчитать визит <b>самому себе</b>\n"
+        )
+    if tab == "rating":
+        return (
+            "<b>Правила рейтинга</b>\n\n"
+            "<b>Как считается</b>\n"
+            "• рейтинг строится по количеству <b>визитов за месяц</b>\n"
+            "• админы по умолчанию получают карту <b>LEVEL GOLD</b>, но <b>не участвуют</b> в рейтингах и розыгрышах\n\n"
+            "<b>Бонус победителям</b>\n"
+            "• топ-3 прошлого месяца получают дополнительную скидку на <b>следующий месяц</b>:\n"
+            "  - 🥇 +10%\n"
+            "  - 🥈 +6%\n"
+            "  - 🥉 +3%\n"
+            "• бонус действует только в течение следующего месяца\n"
+            "• общая скидка = скидка LEVEL + бонус рейтинга\n"
+            "• у призёров в карте LEVEL отображаются <b>все медали</b>, которые они заработали\n"
+        )
+    if tab == "broadcast":
+        return (
+            "<b>Правила рассылок</b>\n\n"
+            "<b>Кому уходят</b>\n"
+            "• рассылки отправляются только <b>пользователям</b>\n"
+            "• админам рассылки <b>не отправляются</b>\n\n"
+            "<b>Сегменты</b>\n"
+            "• <b>Всем</b> (только пользователи)\n"
+            "• <b>Давно не был</b>: от N дней и диапазоны 7-14 / 14-30 / 30-60 / 60-120\n"
+            "• <b>Апгрейд</b>: гости, которым осталось 1-2 визита до следующего уровня\n"
+            "• <b>Конкурс</b>\n\n"
+            "<b>Ограничение частоты</b>\n"
+            "• обычные рассылки система <b>не отправляет</b> гостю чаще, чем <b>1 раз за 7 дней</b>\n"
+            "• исключение: <b>Конкурс</b> система не запрещает отправлять в любое время (бот сам не делает рассылки)\n\n"
+            "<b>Важно про 2 бота</b>\n"
+            "• визиты помечаются источником (кальянная/прокат)\n"
+            "• в сегментах «Давно не был» учитываются визиты только того источника, откуда отправляется рассылка\n"
+        )
+    if tab == "build":
+        return (
+            "<b>Как работает система</b>\n\n"
+            "<b>Карты</b>\n"
+            "• у каждого гостя есть карта LEVEL (привязана к Telegram)\n"
+            "• номер карты 4-значный, выдаётся при регистрации\n\n"
+            "<b>Визиты</b>\n"
+            "• визиты добавляет админ по номеру карты через кнопку <b>Добавить визит</b>\n"
+            "• уровень и скидка пересчитываются автоматически по количеству визитов\n\n"
+            "<b>Админы</b>\n"
+            "• у админов карта всегда <b>GOLD🥇 10%</b> (без визитов)\n"
+            "• админы <b>не участвуют</b> в рейтингах и розыгрышах\n"
+            "• если админа разжаловать, GOLD убирается и уровень снова считается по визитам"
+        )
+    # points (default)
+    return (
+        "<b>Уровни и скидки</b>\n\n"
+        "• <b>IRON⚙️</b>: <b>3%</b> (сразу)\n"
+        "• <b>BRONZE🥉</b>: <b>5%</b> (5 визитов)\n"
+        "• <b>SILVER🥈</b>: <b>7%</b> (15 визитов)\n"
+        "• <b>GOLD🥇</b>: <b>10%</b> (35 визитов)\n"
+    )
+
+
 def admins_manage_keyboard() -> InlineKeyboardMarkup:
     keyboard = InlineKeyboardMarkup()
     keyboard.row(InlineKeyboardButton(text="📋 Список админов", callback_data="admin_admins_list"))
@@ -250,9 +632,311 @@ def admins_manage_keyboard() -> InlineKeyboardMarkup:
     return keyboard
 
 
+def admin_broadcast_menu_keyboard() -> InlineKeyboardMarkup:
+    # Backward-compat (old UI). Now it shows the new root selection.
+    return admin_broadcast_root_keyboard()
+
+
+def _superadmin_ids() -> set[int]:
+    raw = os.getenv("SUPERADMIN_IDS", "").strip()
+    ids: set[int] = set()
+    if not raw:
+        # Keep in sync with is_superadmin() default.
+        return {864921585}
+    for part in raw.split(","):
+        p = part.strip()
+        if not p:
+            continue
+        try:
+            ids.add(int(p))
+        except Exception:
+            continue
+    return ids
+
+
+def _staff_user_ids_known() -> set[int]:
+    """
+    Staff ids for filtering (never send broadcasts, never count in "Всем").
+
+    Includes:
+    - superadmins (env or default)
+    - admins with synced user_id
+    - admins whose @username matches an active user record (even if user_id wasn't synced into admin_roles yet)
+    """
+    ids = set(_superadmin_ids()) | set(admin_user_ids())
+    try:
+        admin_names = {normalize_username(r.username) for r in list_admins()}
+        for uid in active_user_ids():
+            st = get_user_stats(int(uid)) or {}
+            u = st.get("username")
+            if isinstance(u, str):
+                u = normalize_username(u)
+            else:
+                u = ""
+            if u and u in admin_names:
+                ids.add(int(uid))
+    except Exception:
+        pass
+    return ids
+
+
+def admin_broadcast_root_keyboard() -> InlineKeyboardMarkup:
+    """
+    Root broadcast menu: choose target segment immediately.
+    """
+    staff = _staff_user_ids_known()
+    active = set(active_user_ids())
+    total_users = len([uid for uid in active if int(uid) not in staff])
+    keyboard = InlineKeyboardMarkup()
+    keyboard.row(
+        InlineKeyboardButton(
+            text=f"👥 Всем ({total_users})",
+            callback_data="admin_broadcast_root:all",
+        )
+    )
+    keyboard.row(InlineKeyboardButton(text="😴 Давно не был", callback_data="admin_broadcast_root:inactive"))
+    keyboard.row(InlineKeyboardButton(text="🪪 Апгрейд", callback_data="admin_broadcast_root:upgrade"))
+    keyboard.row(InlineKeyboardButton(text="🏆 Конкурс", callback_data="admin_broadcast_root:contest"))
+    keyboard.row(
+        InlineKeyboardButton(text="👈Назад", callback_data="admin_menu"),
+        InlineKeyboardButton(text="🏠 Домой", callback_data="back_to_main"),
+    )
+    return keyboard
+
+
+def admin_broadcast_inactive_keyboard() -> InlineKeyboardMarkup:
+    staff = _staff_user_ids_known()
+
+    def _cnt(days: int) -> int:
+        return len([uid for uid in users_last_visit_older_than_days(days, source=BOT_SOURCE) if int(uid) not in staff])
+
+    def _cnt_range(min_days: int, max_days: int) -> int:
+        return len(
+            [
+                uid
+                for uid in users_no_visits_between_days(min_days, max_days, source=BOT_SOURCE)
+                if int(uid) not in staff
+            ]
+        )
+
+    keyboard = InlineKeyboardMarkup()
+    keyboard.row(
+        InlineKeyboardButton(text=f"От 14 дней ({_cnt(14)})", callback_data="admin_broadcast_inactive:14"),
+        InlineKeyboardButton(text=f"От 30 дней ({_cnt(30)})", callback_data="admin_broadcast_inactive:30"),
+    )
+    keyboard.row(
+        InlineKeyboardButton(text=f"От 60 дней ({_cnt(60)})", callback_data="admin_broadcast_inactive:60"),
+        InlineKeyboardButton(text=f"От 90 дней ({_cnt(90)})", callback_data="admin_broadcast_inactive:90"),
+    )
+    keyboard.row(
+        InlineKeyboardButton(
+            text=f"7-14 дней ({_cnt_range(7, 14)})",
+            callback_data="admin_broadcast_inactive_range:7:14",
+        ),
+        InlineKeyboardButton(
+            text=f"14-30 дней ({_cnt_range(14, 30)})",
+            callback_data="admin_broadcast_inactive_range:14:30",
+        ),
+    )
+    keyboard.row(
+        InlineKeyboardButton(
+            text=f"30-60 дней ({_cnt_range(30, 60)})",
+            callback_data="admin_broadcast_inactive_range:30:60",
+        ),
+        InlineKeyboardButton(
+            text=f"60-120 дней ({_cnt_range(60, 120)})",
+            callback_data="admin_broadcast_inactive_range:60:120",
+        ),
+    )
+    keyboard.row(
+        InlineKeyboardButton(text="👈Назад", callback_data="admin_broadcast"),
+        InlineKeyboardButton(text="🏠 Домой", callback_data="back_to_main"),
+    )
+    return keyboard
+
+
+def _upgrade_targets_counts() -> dict[str, int]:
+    """
+    Counts of non-staff active users close to tier upgrades by visits.
+    """
+    staff = _staff_user_ids_known()
+    active = set(active_user_ids())
+    counts = {"b1": 0, "s2": 0, "s1": 0, "g2": 0, "g1": 0}
+    for c in list_cards():
+        try:
+            uid = int(c.user_id)
+        except Exception:
+            continue
+        if uid not in active:
+            continue
+        if uid in staff:
+            continue
+        if bool(getattr(c, "staff_gold", False)):
+            continue
+        v = int(getattr(c, "visits", 0) or 0)
+        if v == 4:
+            counts["b1"] += 1
+        elif v == 13:
+            counts["s2"] += 1
+        elif v == 14:
+            counts["s1"] += 1
+        elif v == 33:
+            counts["g2"] += 1
+        elif v == 34:
+            counts["g1"] += 1
+    return counts
+
+
+def admin_broadcast_upgrade_keyboard() -> InlineKeyboardMarkup:
+    cnt = _upgrade_targets_counts()
+    keyboard = InlineKeyboardMarkup()
+    keyboard.row(InlineKeyboardButton(text=f"До BRONZE: 1 визит ({cnt['b1']})", callback_data="admin_broadcast_upgrade:b1"))
+    keyboard.row(
+        InlineKeyboardButton(text=f"До SILVER: 2 ({cnt['s2']})", callback_data="admin_broadcast_upgrade:s2"),
+        InlineKeyboardButton(text=f"До SILVER: 1 ({cnt['s1']})", callback_data="admin_broadcast_upgrade:s1"),
+    )
+    keyboard.row(
+        InlineKeyboardButton(text=f"До GOLD: 2 ({cnt['g2']})", callback_data="admin_broadcast_upgrade:g2"),
+        InlineKeyboardButton(text=f"До GOLD: 1 ({cnt['g1']})", callback_data="admin_broadcast_upgrade:g1"),
+    )
+    keyboard.row(
+        InlineKeyboardButton(text="👈Назад", callback_data="admin_broadcast"),
+        InlineKeyboardButton(text="🏠 Домой", callback_data="back_to_main"),
+    )
+    return keyboard
+
+
+def admin_broadcast_confirm_keyboard(back_cb: str) -> InlineKeyboardMarkup:
+    keyboard = InlineKeyboardMarkup()
+    keyboard.row(InlineKeyboardButton(text="➕ Создать рассылку", callback_data="admin_broadcast_make"))
+    keyboard.row(
+        InlineKeyboardButton(text="👈Назад", callback_data=back_cb),
+        InlineKeyboardButton(text="🏠 Домой", callback_data="back_to_main"),
+    )
+    return keyboard
+
+
+def admin_broadcast_cancel_keyboard() -> InlineKeyboardMarkup:
+    keyboard = InlineKeyboardMarkup()
+    keyboard.row(InlineKeyboardButton(text="❌ Отмена", callback_data="admin_broadcast_cancel"))
+    keyboard.row(
+        InlineKeyboardButton(text="👈Назад", callback_data="admin_broadcast"),
+        InlineKeyboardButton(text="🏠 Домой", callback_data="back_to_main"),
+    )
+    return keyboard
+
+
+def admin_broadcast_post_keyboard() -> InlineKeyboardMarkup:
+    keyboard = InlineKeyboardMarkup()
+    keyboard.row(InlineKeyboardButton(text="✅ Отправить", callback_data="admin_broadcast_send"))
+    keyboard.row(InlineKeyboardButton(text="🔁 Другой пост", callback_data="admin_broadcast_replace"))
+    keyboard.row(InlineKeyboardButton(text="❌ Отмена", callback_data="admin_broadcast_cancel"))
+    keyboard.row(
+        InlineKeyboardButton(text="👈Назад", callback_data="admin_broadcast"),
+        InlineKeyboardButton(text="🏠 Домой", callback_data="back_to_main"),
+    )
+    return keyboard
+
+
+def _broadcast_targets(kind: str) -> tuple[str, list[int]]:
+    kind = (kind or "").strip()
+    staff = _staff_user_ids_known()
+    active = set(active_user_ids())
+
+    if kind == "all":
+        # Broadcasts are never sent to staff accounts.
+        targets = sorted([uid for uid in active if int(uid) not in staff])
+        targets = filter_user_ids_by_broadcast_cooldown(targets, days=7)
+        return ("Всем", targets)
+
+    if kind == "contest":
+        # Contest ignores the 7-day broadcast cooldown.
+        targets = sorted([uid for uid in active if int(uid) not in staff])
+        return ("Конкурс", targets)
+
+    if kind.startswith("inactive:"):
+        try:
+            days = int(kind.split(":", 1)[1].strip())
+        except Exception:
+            days = 14
+        targets = [
+            uid
+            for uid in users_last_visit_older_than_days(days, source=BOT_SOURCE)
+            if int(uid) in active and int(uid) not in staff
+        ]
+        targets = filter_user_ids_by_broadcast_cooldown(targets, days=7)
+        return (f"Давно не был: {days} дней", targets)
+
+    if kind.startswith("inactive_range:"):
+        try:
+            rest = kind.split(":", 1)[1].strip()
+            a, b = rest.split(":", 1)
+            min_days = int(a.strip())
+            max_days = int(b.strip())
+        except Exception:
+            min_days = 7
+            max_days = 14
+        targets = [
+            uid
+            for uid in users_no_visits_between_days(min_days, max_days, source=BOT_SOURCE)
+            if int(uid) in active and int(uid) not in staff
+        ]
+        targets = filter_user_ids_by_broadcast_cooldown(targets, days=7)
+        return (f"Давно не был: {min_days}-{max_days} дней", targets)
+
+    if kind.startswith("upgrade:"):
+        code = kind.split(":", 1)[1].strip()
+        want_visits: int | None = None
+        label = "Апгрейд"
+        if code == "b1":
+            want_visits = 4
+            label = "Апгрейд: до BRONZE (1 визит)"
+        elif code == "s2":
+            want_visits = 13
+            label = "Апгрейд: до SILVER (2 визита)"
+        elif code == "s1":
+            want_visits = 14
+            label = "Апгрейд: до SILVER (1 визит)"
+        elif code == "g2":
+            want_visits = 33
+            label = "Апгрейд: до GOLD (2 визита)"
+        elif code == "g1":
+            want_visits = 34
+            label = "Апгрейд: до GOLD (1 визит)"
+
+        targets: list[int] = []
+        if want_visits is not None:
+            for c in list_cards():
+                try:
+                    uid = int(c.user_id)
+                except Exception:
+                    continue
+                if uid not in active:
+                    continue
+                if uid in staff:
+                    continue
+                if bool(getattr(c, "staff_gold", False)):
+                    continue
+                v = int(getattr(c, "visits", 0) or 0)
+                if v == want_visits:
+                    targets.append(uid)
+        targets = sorted(set(targets))
+        targets = filter_user_ids_by_broadcast_cooldown(targets, days=7)
+        return (label, targets)
+
+    # Backward-compat: old audience codes.
+    if kind == "novis14":
+        return _broadcast_targets("inactive:14")
+    if kind == "novis30":
+        return _broadcast_targets("inactive:30")
+    return _broadcast_targets("all")
+
+
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
+BOT_SOURCE = (os.getenv("BOT_SOURCE", "lounge") or "lounge").strip().lower()
 WELCOME_IMAGE_PATH = os.getenv("WELCOME_IMAGE_PATH", "assets/lounge_source.jpg")
+INLINE_IMAGE_PATH = os.getenv("INLINE_IMAGE_PATH", "/Users/evgensuperman/Desktop/ng.JPG")
 GUEST_CARD_URL = os.getenv("GUEST_CARD_URL", "https://example.com/guest-card")
 MENU_URL = os.getenv("MENU_URL", "https://example.com/menu")
 BOOKING_URL = os.getenv("BOOKING_URL", "https://example.com/booking")
@@ -280,12 +964,177 @@ if not BOT_TOKEN:
 
 bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML")
 
+
+def _first_superadmin_id() -> int | None:
+    raw = os.getenv("SUPERADMIN_IDS", "").strip()
+    if not raw:
+        return 864921585
+    try:
+        return int(raw.split(",")[0].strip())
+    except Exception:
+        return None
+
+
+def _inline_cache_file() -> Path:
+    return Path("data") / "inline_cache.json"
+
+
+def _load_inline_cache() -> dict:
+    try:
+        return json.loads(_inline_cache_file().read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _save_inline_cache(d: dict) -> None:
+    try:
+        Path("data").mkdir(parents=True, exist_ok=True)
+        _inline_cache_file().write_text(json.dumps(d, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def ensure_inline_photo_file_id() -> str | None:
+    """
+    Inline results can only show images by URL or cached file_id.
+    We cache a local image by sending it once to the first superadmin chat.
+    """
+    global _inline_photo_file_id
+    if _inline_photo_file_id:
+        return _inline_photo_file_id
+
+    # Prefer cached file_id if it matches current image file mtime.
+    try:
+        p = Path(INLINE_IMAGE_PATH)
+        if not p.exists():
+            p = Path(WELCOME_IMAGE_PATH)
+        if not p.exists():
+            return None
+        mtime = int(p.stat().st_mtime)
+        cached = _load_inline_cache()
+        if (
+            isinstance(cached, dict)
+            and cached.get("path") == str(p)
+            and int(cached.get("mtime") or 0) == mtime
+            and isinstance(cached.get("photo_file_id"), str)
+            and cached.get("photo_file_id")
+        ):
+            _inline_photo_file_id = str(cached["photo_file_id"])
+            return _inline_photo_file_id
+    except Exception:
+        pass
+
+    chat_id = _first_superadmin_id()
+    if not chat_id:
+        return None
+
+    try:
+        p = Path(INLINE_IMAGE_PATH)
+        if not p.exists():
+            p = Path(WELCOME_IMAGE_PATH)
+        if not p.exists():
+            return None
+
+        with p.open("rb") as f:
+            msg = bot.send_photo(chat_id, f, caption="cache", disable_notification=True)
+        if not msg.photo:
+            return None
+        _inline_photo_file_id = msg.photo[-1].file_id
+        try:
+            _save_inline_cache(
+                {"path": str(p), "mtime": int(p.stat().st_mtime), "photo_file_id": _inline_photo_file_id}
+            )
+        except Exception:
+            pass
+        try:
+            bot.delete_message(chat_id, msg.message_id)
+        except Exception:
+            pass
+        log.info("Cached inline photo file_id for %s", str(p))
+        return _inline_photo_file_id
+    except Exception as e:
+        log.warning("Failed to cache inline photo: %s", e)
+        return None
+
+
+def _build_info_text() -> str:
+    ver = "unknown"
+    try:
+        ver = (Path("VERSION").read_text(encoding="utf-8") or "").strip() or "unknown"
+    except Exception:
+        pass
+    try:
+        mtime = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(Path(__file__).stat().st_mtime))
+    except Exception:
+        mtime = "unknown"
+    return f"Build: <b>{escape(ver)}</b>\nSource: <b>{escape(BOT_SOURCE)}</b>\nFile: <code>bot.py</code> mtime {escape(mtime)}"
+
 # Best-effort guards against duplicate UI actions.
 _recent_callback_keys: dict[tuple[int, str, int], float] = {}
 _main_menu_photo_file_id: str | None = None
 _recent_message_keys: dict[tuple[int, int], float] = {}
 _pending_admin_add: set[int] = set()
 _pending_visit_add: dict[int, str] = {}  # chat_id -> back_cb
+_pending_broadcast: dict[int, dict[str, object]] = {}  # chat_id -> state
+
+
+def _pending_broadcast_file() -> Path:
+    return Path("data") / "pending_broadcast.json"
+
+
+def _load_pending_broadcast() -> None:
+    """
+    Best-effort persistence for the broadcast flow.
+    Prevents losing state if polling restarts.
+    """
+    global _pending_broadcast
+    try:
+        p = _pending_broadcast_file()
+        if not p.exists():
+            return
+        raw = json.loads(p.read_text(encoding="utf-8"))
+        if not isinstance(raw, dict):
+            return
+        now = time.time()
+        out: dict[int, dict[str, object]] = {}
+        for k, v in raw.items():
+            try:
+                chat_id = int(k)
+            except Exception:
+                continue
+            if not isinstance(v, dict):
+                continue
+            ts = v.get("_ts")
+            try:
+                ts_f = float(ts) if ts is not None else 0.0
+            except Exception:
+                ts_f = 0.0
+            # Expire after 2 hours.
+            if ts_f and (now - ts_f) > 2 * 3600:
+                continue
+            out[chat_id] = v
+        _pending_broadcast = out
+    except Exception:
+        return
+
+
+def _save_pending_broadcast() -> None:
+    try:
+        Path("data").mkdir(parents=True, exist_ok=True)
+        out: dict[str, dict[str, object]] = {}
+        now = time.time()
+        for chat_id, st in _pending_broadcast.items():
+            if not isinstance(st, dict):
+                continue
+            # Don't persist huge/untrusted objects; keep only expected keys.
+            d: dict[str, object] = {"_ts": now}
+            for key in ("kind", "targets", "label", "stage", "src_chat_id", "src_message_id"):
+                if key in st:
+                    d[key] = st.get(key)
+            out[str(int(chat_id))] = d
+        _pending_broadcast_file().write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        pass
 
 def _callback_guard(call: telebot.types.CallbackQuery, window_s: float = 1.5) -> bool:
     """
@@ -318,6 +1167,7 @@ def _callback_guard(call: telebot.types.CallbackQuery, window_s: float = 1.5) ->
                 UserInfo(
                     user_id=user_id,
                     first_name=call.from_user.first_name,
+                    last_name=call.from_user.last_name,
                     username=call.from_user.username,
                 )
             )
@@ -327,6 +1177,18 @@ def _callback_guard(call: telebot.types.CallbackQuery, window_s: float = 1.5) ->
                 call.from_user.first_name,
                 call.from_user.last_name,
             )
+            # Staff accounts always have GOLD card (no visits are added by this).
+            if _is_staff(call.from_user):
+                set_staff_gold_by_user_id(
+                    user_id,
+                    username=call.from_user.username,
+                    first_name=call.from_user.first_name,
+                    last_name=call.from_user.last_name,
+                )
+            else:
+                # If a user was previously staff and got demoted, drop staff GOLD and
+                # recalculate their LEVEL from visits.
+                clear_staff_gold_by_user_id(user_id)
         inc_click(user_id)
     except Exception:
         # If we can't compute a key, still allow processing once.
@@ -361,6 +1223,7 @@ def _message_guard(message: telebot.types.Message, window_s: float = 2.0) -> boo
                 UserInfo(
                     user_id=message.from_user.id,
                     first_name=message.from_user.first_name,
+                    last_name=message.from_user.last_name,
                     username=message.from_user.username,
                 )
             )
@@ -370,6 +1233,18 @@ def _message_guard(message: telebot.types.Message, window_s: float = 2.0) -> boo
                 message.from_user.first_name,
                 message.from_user.last_name,
             )
+            # Staff accounts always have GOLD card (no visits are added by this).
+            if _is_staff(message.from_user):
+                set_staff_gold_by_user_id(
+                    message.from_user.id,
+                    username=message.from_user.username,
+                    first_name=message.from_user.first_name,
+                    last_name=message.from_user.last_name,
+                )
+            else:
+                # If a user was previously staff and got demoted, drop staff GOLD and
+                # recalculate their LEVEL from visits.
+                clear_staff_gold_by_user_id(message.from_user.id)
             inc_click(message.from_user.id)
     except Exception:
         pass
@@ -453,7 +1328,7 @@ def _send_admin_view(chat_id: int, *, username: str, offset: int = 0) -> None:
 
     total = 0
     if rec.user_id:
-        v_today, v_7, v_30, v_total = admin_marked_visits_summary(int(rec.user_id))
+        v_today, v_7, v_30, v_total = admin_marked_visits_summary(int(rec.user_id), source=BOT_SOURCE)
         lines.append("")
         lines.append("<b>Рейтинг</b>")
         lines.append(f"Визитов за сегодня: <b>{v_today}</b>")
@@ -463,7 +1338,7 @@ def _send_admin_view(chat_id: int, *, username: str, offset: int = 0) -> None:
 
         lines.append("")
         lines.append("<b>Последние отмеченные</b>")
-        recent, total = admin_marked_recent_clients_page(int(rec.user_id), offset=offset, limit=20)
+        recent, total = admin_marked_recent_clients_page(int(rec.user_id), source=BOT_SOURCE, offset=offset, limit=20)
         if not recent:
             lines.append("Нет данных.")
         else:
@@ -576,7 +1451,7 @@ def _card_number_for_user(user_id: int) -> str:
 
 
 def level_card_inline_text(*, username: str, user_id: int) -> str:
-    v7, v30, vtotal = user_visit_counts(user_id)
+    _v7, _v30, vtotal = user_visit_counts(user_id)
     card = find_card_by_user_id(user_id)
     if card is None:
         # No registered card, no inline result should be returned (handled upstream).
@@ -586,15 +1461,22 @@ def level_card_inline_text(*, username: str, user_id: int) -> str:
         level_label = card.level
         discount = card.discount
         card_number = card.card_number
+
+    lvl_override = _staff_level_label(user_id, username)
+    if lvl_override:
+        level_label = lvl_override
+
+    total_disc, bonus_disc = total_discount_for_user(user_id, int(discount))
+    medals = medals_for_user(user_id)
+    medals_line = f"Всего медалей: {medals}\n" if medals else ""
     u = username.strip().lstrip("@")
     return (
-        f"КАРТА LEVEL @{u}\n\n"
-        f"Уровень - {level_label}\n"
-        f"Номер карты: {card_number}\n"
-        f"Скидка - {discount}%\n\n"
-        f"Визитов за 7 дней: {v7}\n"
-        f"Визитов за 30 дней: {v30}\n"
-        f"Всего визитов: {vtotal}"
+        f"<b>КАРТА LEVEL</b> <b>@{escape(u)}</b>\n\n"
+        f"Уровень: <b>{escape(str(level_label))}</b>\n"
+        f"Номер карты: <b>{escape(str(card_number))}</b>\n\n"
+        f"Всего визитов: <b>{int(vtotal)}</b>\n"
+        f"{medals_line}"
+        f"Общая скидка: <b>{int(total_disc)}%</b>"
     )
 
 
@@ -617,26 +1499,152 @@ def send_level_menu(chat_id: int, user: telebot.types.User | None, user_id: int 
 
     bot.send_message(
         chat_id,
-        "Карта <b>LEVEL</b> - это твой личный профиль гостя. Здесь растёт уровень скидки.",
+        "Карта <b>LEVEL</b> - это твой личный профиль гостя. Здесь растёт уровень скидки и не только…",
         reply_markup=guest_card_inline_keyboard(),
     )
 
-def level_info_text() -> str:
+
+def level_card_message_text(user: telebot.types.User | None, user_id: int | None) -> str:
+    display_name = user_display_name(user)
+    if user_id is not None and is_registered(user_id):
+        ensure_level_card(
+            user_id,
+            username=(user.username if user else None),
+            first_name=(user.first_name if user else None),
+            last_name=(user.last_name if user else None),
+        )
+        return guest_card_text(display_name, user_id=user_id)
+    return (
+        "Карта <b>LEVEL</b> - это твой личный профиль гостя. Здесь растёт уровень скидки и не только…"
+    )
+
+def level_visits_text() -> str:
     return (
         "<b>🧾 О визитах</b>\n\n"
+        "Чтобы засчитались <b>скидка</b> и <b>визит</b>, нужно назвать номер карты администратору.\n\n"
         "Визит засчитывается при условии чека от <b>1000₽</b>.\n"
-        "Засчитать визит можно не чаще <b>1 раза в день</b>.\n\n"
-        "Скидка по твоему уровню действует всегда, даже если визит не засчитан."
+        "Засчитать визит можно не чаще <b>1 раза в день</b> "
+        "(специально обученный админ обновляет счетчик в 6 утра).\n\n"
+        "Кстати, визиты <b>не сгорают</b>\n\n\n"
+        "<b>🏆 О рейтинге</b>\n\n"
+        "<b>Как считается</b>\n"
+        "• топ-3 гостей по количеству визитов за месяц\n\n"
+        "<b>Призёры</b>\n"
+        "• все призёры месяца участвуют в розыгрыше питбайка в конце года\n"
+        "• чем больше медалей у гостя за год, тем выше шанс в розыгрыше\n\n"
+        "<b>Бонус к скидке</b>\n"
+        "• 🥇 +10% на следующий месяц\n"
+        "• 🥈 +6% на следующий месяц\n"
+        "• 🥉 +3% на следующий месяц\n"
+        "• общая скидка = скидка LEVEL + бонус рейтинга\n"
     )
 
 
-def level_info_keyboard() -> InlineKeyboardMarkup:
-    keyboard = InlineKeyboardMarkup()
-    keyboard.row(
-        InlineKeyboardButton(text="👈Назад", callback_data="main_guest_card"),
-        InlineKeyboardButton(text="🏠 Домой", callback_data="back_to_main"),
-    )
-    return keyboard
+def _level_rating_name(card: LevelCard) -> tuple[str, str | None]:
+    uname = (card.username or "").strip().lstrip("@") or None
+    name = " ".join([x for x in [(card.first_name or "").strip(), (card.last_name or "").strip()] if x]).strip()
+    if name:
+        return (name, uname)
+    if uname:
+        return (f"@{uname}", uname)
+    return ("Гость", None)
+
+
+def level_rating_text(*, superadmin: bool) -> str:
+    tz = None
+    try:
+        tz = ZoneInfo("Asia/Tyumen")
+    except Exception:
+        tz = datetime.now().astimezone().tzinfo
+    now = datetime.now(tz)  # type: ignore[arg-type]
+
+    # Leaderboard launches from March 1st. Before that, show empty slots.
+    LAUNCH = datetime(2026, 3, 1, 0, 0, 0, tzinfo=tz)  # type: ignore[arg-type]
+    show_month_year = LAUNCH.year if now < LAUNCH else now.year
+    show_month = 3 if now < LAUNCH else now.month
+
+    month_nom = [
+        "январь",
+        "февраль",
+        "март",
+        "апрель",
+        "май",
+        "июнь",
+        "июль",
+        "август",
+        "сентябрь",
+        "октябрь",
+        "ноябрь",
+        "декабрь",
+    ]
+    month_gen = [
+        "января",
+        "февраля",
+        "марта",
+        "апреля",
+        "мая",
+        "июня",
+        "июля",
+        "августа",
+        "сентября",
+        "октября",
+        "ноября",
+        "декабря",
+    ]
+    m_nom = month_nom[show_month - 1] if 1 <= show_month <= 12 else "месяц"
+    m_gen = month_gen[show_month - 1] if 1 <= show_month <= 12 else "месяца"
+
+    staff = _staff_user_ids_known()
+    rows: list[dict] = []
+    if now >= LAUNCH:
+        rows = top_users_by_visits_in_month(show_month_year, show_month, source=BOT_SOURCE, limit=3, active_only=True)
+        rows = [r for r in rows if is_eligible_for_competitions(int(r.get("user_id") or 0))][:3]
+
+    def _place_line(place: int) -> str:
+        row = rows[place - 1] if 0 <= (place - 1) < len(rows) else None
+        medals = {1: "🥇", 2: "🥈", 3: "🥉"}
+        prefix = medals.get(place, f"{place}.")
+        if not row:
+            return f"{prefix} — свободно"
+        uid = int(row.get("user_id") or 0)
+        # Do not make winners clickable (avoid random users DM'ing them).
+        # Use Telegram profile name (cached in admin_stats when user interacts with the bot).
+        stats = get_user_stats(uid) or {}
+        first = (stats.get("first_name") or "").strip()
+        last = (stats.get("last_name") or "").strip()
+        full = " ".join([x for x in [first, last] if x]).strip()
+        label = full or first or str(uid)
+        if superadmin:
+            uname = stats.get("username")
+            if isinstance(uname, str):
+                uname = uname.strip().lstrip("@") or None
+            else:
+                uname = None
+            link = _tg_user_link(uid, uname)
+            return f'{prefix} — <a href="{link}"><b>{escape(str(label))}</b></a>'
+        return f"{prefix} — <b>{escape(str(label))}</b>"
+
+    lines: list[str] = []
+    lines.append("<b>🏆 Рейтинг гостей</b>")
+    lines.append("")
+    lines.append(f"Топ по визитам за <b>{escape(m_nom)}</b>")
+    if now < LAUNCH:
+        lines.append("(Стартуем 1 марта)")
+    lines.append("")
+    lines.append(_place_line(1))
+    lines.append(_place_line(2))
+    lines.append(_place_line(3))
+    lines.append("")
+    lines.append("Стань первым лидером бара.")
+    lines.append("")
+    lines.append("<b>Награды месяца:</b>")
+    lines.append("Топ-3 получают настоящие медали")
+    lines.append("")
+    lines.append("Дополнительную скидку на следующий месяц")
+    lines.append("")
+    lines.append("🏁 Все призёры участвуют")
+    lines.append("в розыгрыше питбайка из бара.")
+    return "\n".join(lines)
 
 
 def send_location_menu(chat_id: int) -> None:
@@ -667,6 +1675,7 @@ def send_booking_menu(chat_id: int) -> None:
 def handle_start(message: telebot.types.Message) -> None:
     if not _message_guard(message):
         return
+    log.info("cmd /start from user_id=%s chat_id=%s", getattr(message.from_user, "id", None), message.chat.id)
     send_main_menu(message.chat.id, user=message.from_user)
 
 
@@ -674,6 +1683,7 @@ def handle_start(message: telebot.types.Message) -> None:
 def handle_level_command(message: telebot.types.Message) -> None:
     if not _message_guard(message):
         return
+    log.info("cmd /level from user_id=%s chat_id=%s", getattr(message.from_user, "id", None), message.chat.id)
     user_id = message.from_user.id if message.from_user else None
     try:
         send_level_menu(message.chat.id, message.from_user, user_id)
@@ -705,6 +1715,14 @@ def handle_location_command(message: telebot.types.Message) -> None:
     if not _message_guard(message):
         return
     send_location_menu(message.chat.id)
+
+
+@bot.message_handler(commands=["version", "ver", "v"])
+def handle_version_command(message: telebot.types.Message) -> None:
+    if not _message_guard(message):
+        return
+    # Visible to anyone; it's safe and helps verify which build is running.
+    bot.send_message(message.chat.id, _build_info_text(), disable_web_page_preview=True)
 
 
 @bot.callback_query_handler(func=lambda call: call.data == "main_admin")
@@ -750,7 +1768,7 @@ def handle_admin_stats(call: telebot.types.CallbackQuery) -> None:
     if not is_superadmin(call.from_user.id if call.from_user else None):
         return
 
-    visits_today, visits_7, visits_30 = visit_counts()
+    visits_today, visits_7, visits_30 = visit_counts(source=BOT_SOURCE)
     subs_today, subs_7, subs_30 = subscribed_counts()
     # Keep unsubscribed_counts() imported for later, but we don't show it in UI now.
     top = top_by_clicks(10)
@@ -786,7 +1804,7 @@ def handle_admin_stats(call: telebot.types.CallbackQuery) -> None:
 
     lines.append("")
     lines.append("<b>Топ админов по визитам</b>")
-    admin_rows = top_admins_by_marked_visits(days=30, limit=100)
+    admin_rows = top_admins_by_marked_visits(source=BOT_SOURCE, days=30, limit=100)
     if not admin_rows:
         lines.append("Нет данных.")
     else:
@@ -823,6 +1841,398 @@ def handle_admin_stats(call: telebot.types.CallbackQuery) -> None:
         reply_markup=admin_bottom_keyboard("admin_menu"),
         disable_web_page_preview=True,
     )
+
+
+@bot.callback_query_handler(func=lambda call: call.data == "admin_broadcast")
+def handle_admin_broadcast(call: telebot.types.CallbackQuery) -> None:
+    if not _callback_guard(call):
+        return
+    if call.message is None:
+        return
+    if not is_superadmin(call.from_user.id if call.from_user else None):
+        return
+
+    _pending_broadcast.pop(call.message.chat.id, None)
+    bot.send_message(
+        call.message.chat.id,
+        "<b>Рассылка</b>\n\nВыбери, кому отправлять:",
+        reply_markup=admin_broadcast_root_keyboard(),
+    )
+
+
+@bot.callback_query_handler(func=lambda call: call.data == "admin_broadcast_create")
+def handle_admin_broadcast_create(call: telebot.types.CallbackQuery) -> None:
+    if not _callback_guard(call):
+        return
+    if call.message is None:
+        return
+    if not is_superadmin(call.from_user.id if call.from_user else None):
+        return
+
+    # Backward-compat: old UI entry.
+    _pending_broadcast.pop(call.message.chat.id, None)
+    bot.send_message(
+        call.message.chat.id,
+        "<b>Рассылка</b>\n\nВыбери, кому отправлять:",
+        reply_markup=admin_broadcast_root_keyboard(),
+    )
+
+
+@bot.callback_query_handler(func=lambda call: (call.data or "").startswith("admin_broadcast_root:"))
+def handle_admin_broadcast_root(call: telebot.types.CallbackQuery) -> None:
+    if not _callback_guard(call):
+        return
+    if call.message is None:
+        return
+    if not is_superadmin(call.from_user.id if call.from_user else None):
+        return
+
+    action = (call.data or "").split(":", 1)[1].strip()
+    _pending_broadcast.pop(call.message.chat.id, None)
+    _save_pending_broadcast()
+
+    if action == "inactive":
+        bot.send_message(
+            call.message.chat.id,
+            "<b>Давно не был</b>\n\nВыбери период:",
+            reply_markup=admin_broadcast_inactive_keyboard(),
+        )
+        return
+
+    if action == "upgrade":
+        bot.send_message(
+            call.message.chat.id,
+            "<b>Апгрейд</b>\n\nВыбери сегмент:",
+            reply_markup=admin_broadcast_upgrade_keyboard(),
+        )
+        return
+
+    if action == "contest":
+        label, targets = _broadcast_targets("contest")
+        _pending_broadcast[call.message.chat.id] = {"kind": "contest", "targets": targets, "label": label}
+        _save_pending_broadcast()
+        bot.send_message(
+            call.message.chat.id,
+            f"<b>Рассылка</b>\n\nКому: <b>{escape(label)}</b>\nПолучателей: <b>{len(targets)}</b>",
+            reply_markup=admin_broadcast_confirm_keyboard("admin_broadcast"),
+            disable_web_page_preview=True,
+        )
+        return
+
+    # action == "all"
+    label, targets = _broadcast_targets("all")
+    _pending_broadcast[call.message.chat.id] = {"kind": "all", "targets": targets, "label": label}
+    _save_pending_broadcast()
+    bot.send_message(
+        call.message.chat.id,
+        f"<b>Рассылка</b>\n\nКому: <b>{escape(label)}</b>\nПолучателей: <b>{len(targets)}</b>",
+        reply_markup=admin_broadcast_confirm_keyboard("admin_broadcast"),
+        disable_web_page_preview=True,
+    )
+
+
+@bot.callback_query_handler(func=lambda call: (call.data or "").startswith("admin_broadcast_inactive:"))
+def handle_admin_broadcast_inactive(call: telebot.types.CallbackQuery) -> None:
+    if not _callback_guard(call):
+        return
+    if call.message is None:
+        return
+    if not is_superadmin(call.from_user.id if call.from_user else None):
+        return
+    days_raw = (call.data or "").split(":", 1)[1].strip()
+    try:
+        days = int(days_raw)
+    except Exception:
+        days = 14
+    kind = f"inactive:{days}"
+    label, targets = _broadcast_targets(kind)
+    _pending_broadcast[call.message.chat.id] = {"kind": kind, "targets": targets, "label": label}
+    _save_pending_broadcast()
+    bot.send_message(
+        call.message.chat.id,
+        f"<b>Рассылка</b>\n\nКому: <b>{escape(label)}</b>\nПолучателей: <b>{len(targets)}</b>",
+        reply_markup=admin_broadcast_confirm_keyboard("admin_broadcast_root:inactive"),
+        disable_web_page_preview=True,
+    )
+
+
+@bot.callback_query_handler(func=lambda call: (call.data or "").startswith("admin_broadcast_inactive_range:"))
+def handle_admin_broadcast_inactive_range(call: telebot.types.CallbackQuery) -> None:
+    if not _callback_guard(call):
+        return
+    if call.message is None:
+        return
+    if not is_superadmin(call.from_user.id if call.from_user else None):
+        return
+
+    rest = (call.data or "").split(":", 1)[1].strip()
+    try:
+        a, b = rest.split(":", 1)
+        min_days = int(a.strip())
+        max_days = int(b.strip())
+    except Exception:
+        min_days = 7
+        max_days = 14
+
+    kind = f"inactive_range:{min_days}:{max_days}"
+    label, targets = _broadcast_targets(kind)
+    _pending_broadcast[call.message.chat.id] = {"kind": kind, "targets": targets, "label": label}
+    _save_pending_broadcast()
+    bot.send_message(
+        call.message.chat.id,
+        f"<b>Рассылка</b>\n\nКому: <b>{escape(label)}</b>\nПолучателей: <b>{len(targets)}</b>",
+        reply_markup=admin_broadcast_confirm_keyboard("admin_broadcast_root:inactive"),
+        disable_web_page_preview=True,
+    )
+
+
+@bot.callback_query_handler(func=lambda call: (call.data or "").startswith("admin_broadcast_upgrade:"))
+def handle_admin_broadcast_upgrade(call: telebot.types.CallbackQuery) -> None:
+    if not _callback_guard(call):
+        return
+    if call.message is None:
+        return
+    if not is_superadmin(call.from_user.id if call.from_user else None):
+        return
+    code = (call.data or "").split(":", 1)[1].strip()
+    kind = f"upgrade:{code}"
+    label, targets = _broadcast_targets(kind)
+    _pending_broadcast[call.message.chat.id] = {"kind": kind, "targets": targets, "label": label}
+    _save_pending_broadcast()
+    bot.send_message(
+        call.message.chat.id,
+        f"<b>Рассылка</b>\n\nКому: <b>{escape(label)}</b>\nПолучателей: <b>{len(targets)}</b>",
+        reply_markup=admin_broadcast_confirm_keyboard("admin_broadcast_root:upgrade"),
+        disable_web_page_preview=True,
+    )
+
+
+@bot.callback_query_handler(func=lambda call: call.data == "admin_broadcast_make")
+def handle_admin_broadcast_make(call: telebot.types.CallbackQuery) -> None:
+    if not _callback_guard(call):
+        return
+    if call.message is None:
+        return
+    if not is_superadmin(call.from_user.id if call.from_user else None):
+        return
+
+    state = _pending_broadcast.get(call.message.chat.id) or {}
+    targets = state.get("targets")
+    label = state.get("label") or "Аудитория"
+    if not isinstance(targets, list):
+        targets = []
+    if not targets:
+        _pending_broadcast.pop(call.message.chat.id, None)
+        bot.send_message(call.message.chat.id, "Получателей нет.", reply_markup=admin_broadcast_root_keyboard())
+        return
+
+    # Now awaiting a ready-to-send post (forward/copy any message).
+    _pending_broadcast[call.message.chat.id] = {
+        "kind": state.get("kind"),
+        "targets": targets,
+        "label": label,
+        "stage": "await_post",
+    }
+    _save_pending_broadcast()
+    bot.send_message(
+        call.message.chat.id,
+        f"<b>Рассылка</b>\n\n"
+        f"Кому: <b>{escape(str(label))}</b>\n"
+        f"Получателей: <b>{len(targets)}</b>\n\n"
+        "Перешли готовый пост сюда (текст/фото/видео и т.д.).\n"
+        "Бот скопирует его гостям.",
+        reply_markup=admin_broadcast_cancel_keyboard(),
+        disable_web_page_preview=True,
+    )
+
+
+@bot.callback_query_handler(func=lambda call: (call.data or "").startswith("admin_broadcast_aud:"))
+def handle_admin_broadcast_audience(call: telebot.types.CallbackQuery) -> None:
+    if not _callback_guard(call):
+        return
+    if call.message is None:
+        return
+    if not is_superadmin(call.from_user.id if call.from_user else None):
+        return
+
+    # Backward-compat: old audience picker buttons map to the new "confirm -> create" flow.
+    kind0 = (call.data or "").split(":", 1)[1].strip()
+    if kind0 == "all":
+        kind = "all"
+        back_cb = "admin_broadcast"
+    elif kind0 == "novis14":
+        kind = "inactive:14"
+        back_cb = "admin_broadcast_root:inactive"
+    elif kind0 == "novis30":
+        kind = "inactive:30"
+        back_cb = "admin_broadcast_root:inactive"
+    else:
+        kind = "all"
+        back_cb = "admin_broadcast"
+
+    label, targets = _broadcast_targets(kind)
+    _pending_broadcast[call.message.chat.id] = {"kind": kind, "targets": targets, "label": label}
+    bot.send_message(
+        call.message.chat.id,
+        f"<b>Рассылка</b>\n\nКому: <b>{escape(label)}</b>\nПолучателей: <b>{len(targets)}</b>",
+        reply_markup=admin_broadcast_confirm_keyboard(back_cb),
+        disable_web_page_preview=True,
+    )
+
+
+@bot.callback_query_handler(func=lambda call: call.data == "admin_broadcast_cancel")
+def handle_admin_broadcast_cancel(call: telebot.types.CallbackQuery) -> None:
+    if not _callback_guard(call):
+        return
+    if call.message is None:
+        return
+    if not is_superadmin(call.from_user.id if call.from_user else None):
+        return
+    _pending_broadcast.pop(call.message.chat.id, None)
+    _save_pending_broadcast()
+    bot.send_message(call.message.chat.id, "Отменено.", reply_markup=admin_broadcast_root_keyboard())
+
+
+@bot.callback_query_handler(func=lambda call: call.data == "admin_broadcast_replace")
+def handle_admin_broadcast_replace(call: telebot.types.CallbackQuery) -> None:
+    if not _callback_guard(call):
+        return
+    if call.message is None:
+        return
+    if not is_superadmin(call.from_user.id if call.from_user else None):
+        return
+
+    state = _pending_broadcast.get(call.message.chat.id) or {}
+    targets = state.get("targets")
+    label = state.get("label") or "Аудитория"
+    if not isinstance(targets, list):
+        targets = []
+    _pending_broadcast[call.message.chat.id] = {
+        "kind": state.get("kind"),
+        "targets": targets,
+        "label": label,
+        "stage": "await_post",
+    }
+    _save_pending_broadcast()
+    bot.send_message(
+        call.message.chat.id,
+        f"<b>Рассылка</b>\n\nКому: <b>{escape(str(label))}</b>\nПолучателей: <b>{len(targets)}</b>\n\nПерешли другой пост сюда.",
+        reply_markup=admin_broadcast_cancel_keyboard(),
+        disable_web_page_preview=True,
+    )
+
+
+@bot.callback_query_handler(func=lambda call: call.data == "admin_broadcast_send")
+def handle_admin_broadcast_send(call: telebot.types.CallbackQuery) -> None:
+    if not _callback_guard(call):
+        return
+    if call.message is None:
+        return
+    if not is_superadmin(call.from_user.id if call.from_user else None):
+        return
+
+    state = _pending_broadcast.get(call.message.chat.id) or {}
+    targets = state.get("targets")
+    if not isinstance(targets, list) or not targets:
+        _pending_broadcast.pop(call.message.chat.id, None)
+        _save_pending_broadcast()
+        bot.send_message(
+            call.message.chat.id,
+            "Сессия рассылки сброшена.\n\nОткрой <b>Рассылка</b> и выбери аудиторию заново.",
+            reply_markup=admin_broadcast_root_keyboard(),
+        )
+        return
+
+    src_chat_id = state.get("src_chat_id")
+    src_message_id = state.get("src_message_id")
+    if not isinstance(src_chat_id, int) or not isinstance(src_message_id, int):
+        bot.send_message(
+            call.message.chat.id,
+            "Сначала перешли пост для рассылки сообщением.",
+            reply_markup=admin_broadcast_cancel_keyboard(),
+        )
+        return
+
+    # Never broadcast to staff accounts.
+    staff = _staff_user_ids_known()
+    targets = [int(uid) for uid in targets if int(uid) not in staff]
+    if not targets:
+        _pending_broadcast.pop(call.message.chat.id, None)
+        _save_pending_broadcast()
+        bot.send_message(call.message.chat.id, "Получателей нет.", reply_markup=admin_broadcast_root_keyboard())
+        return
+
+    kind = str(state.get("kind") or "").strip().lower()
+    # All broadcasts except contest are limited to once per 7 days per user.
+    if kind and kind != "contest":
+        targets = filter_user_ids_by_broadcast_cooldown(targets, days=7)
+        if not targets:
+            _pending_broadcast.pop(call.message.chat.id, None)
+            _save_pending_broadcast()
+            bot.send_message(call.message.chat.id, "Получателей нет.", reply_markup=admin_broadcast_root_keyboard())
+            return
+
+    _pending_broadcast.pop(call.message.chat.id, None)
+    _save_pending_broadcast()
+    bot.send_message(call.message.chat.id, f"Начинаю рассылку. Получателей: <b>{len(targets)}</b>")
+
+    sent = 0
+    failed = 0
+    for uid in targets:
+        try:
+            bot.copy_message(int(uid), int(src_chat_id), int(src_message_id))
+            try:
+                record_broadcast_sent(int(uid), kind=(kind or "broadcast"), source=BOT_SOURCE)
+            except Exception:
+                pass
+            sent += 1
+        except Exception:
+            failed += 1
+        time.sleep(0.05)
+
+    bot.send_message(
+        call.message.chat.id,
+        f"Готово.\nОтправлено: <b>{sent}</b>\nОшибок: <b>{failed}</b>",
+        reply_markup=admin_broadcast_root_keyboard(),
+        disable_web_page_preview=True,
+    )
+
+
+@bot.callback_query_handler(func=lambda call: call.data == "admin_rules" or (call.data or "").startswith("admin_rules:"))
+def handle_admin_rules(call: telebot.types.CallbackQuery) -> None:
+    if not _callback_guard(call):
+        return
+    if call.message is None:
+        return
+    if not is_superadmin(call.from_user.id if call.from_user else None):
+        return
+
+    data = call.data or "admin_rules"
+    tab = "points"
+    if ":" in data:
+        _p = data.split(":", 1)[1].strip()
+        if _p in {"points", "visits", "rating", "broadcast", "build"}:
+            tab = _p
+
+    text = admin_rules_text(tab)
+    kb = admin_rules_keyboard(tab)
+
+    # Try edit in-place to avoid extra messages.
+    try:
+        bot.edit_message_text(
+            text,
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            reply_markup=kb,
+            disable_web_page_preview=True,
+        )
+    except Exception:
+        bot.send_message(
+            call.message.chat.id,
+            text,
+            reply_markup=kb,
+            disable_web_page_preview=True,
+        )
 
 
 @bot.callback_query_handler(func=lambda call: call.data == "admin_admins")
@@ -893,11 +2303,93 @@ def handle_admin_add_input(message: telebot.types.Message) -> None:
 
     add_admin_by_username(username)
     _pending_admin_add.discard(message.chat.id)
+    # If we already know this admin's user_id, force GOLD card right away.
+    try:
+        uid = find_user_id_by_username(username)
+        if uid is not None:
+            set_staff_gold_by_user_id(uid, username=username)
+    except Exception:
+        pass
     bot.send_message(message.chat.id, f"Готово. Добавил админа: <b>@{escape(username)}</b>")
     bot.send_message(
         message.chat.id,
         "<b>Админы</b>",
         reply_markup=admins_list_keyboard("admin_admins"),
+        disable_web_page_preview=True,
+    )
+
+
+@bot.message_handler(
+    content_types=[
+        "text",
+        "photo",
+        "video",
+        "document",
+        "audio",
+        "voice",
+        "animation",
+        "sticker",
+    ],
+    func=lambda m: m.chat is not None and m.chat.id in _pending_broadcast,
+)
+def handle_admin_broadcast_text(message: telebot.types.Message) -> None:
+    if not _message_guard(message):
+        return
+    if not is_superadmin(message.from_user.id if message.from_user else None):
+        _pending_broadcast.pop(message.chat.id, None)
+        return
+
+    state = _pending_broadcast.get(message.chat.id) or {}
+    stage = str(state.get("stage") or "").strip().lower() or "await_post"
+    targets = state.get("targets")
+    if not isinstance(targets, list) or not targets:
+        _pending_broadcast.pop(message.chat.id, None)
+        bot.send_message(message.chat.id, "Получателей нет.", reply_markup=admin_broadcast_root_keyboard())
+        return
+
+    if stage != "await_post":
+        bot.send_message(
+            message.chat.id,
+            "Пост уже получен. Нажми <b>Отправить</b> или <b>Другой пост</b>.",
+            reply_markup=admin_broadcast_post_keyboard(),
+        )
+        return
+
+    kind = str(state.get("kind") or "").strip().lower()
+    label = state.get("label") or "Аудитория"
+
+    # Don't accept commands as a "post".
+    if message.content_type == "text":
+        txt = (message.text or "").strip()
+        if txt.startswith("/"):
+            bot.send_message(
+                message.chat.id,
+                "Перешли готовый пост сообщением (или нажми <b>Отмена</b>).",
+                reply_markup=admin_broadcast_cancel_keyboard(),
+            )
+            return
+
+    # Store the post source; sending is confirmed via button.
+    _pending_broadcast[message.chat.id] = {
+        "kind": kind,
+        "targets": targets,
+        "label": label,
+        "stage": "confirm",
+        "src_chat_id": int(message.chat.id),
+        "src_message_id": int(message.message_id),
+    }
+    _save_pending_broadcast()
+
+    bot.send_message(message.chat.id, "Вот как будет выглядеть рассылка:")
+    try:
+        bot.copy_message(message.chat.id, message.chat.id, message.message_id)
+    except Exception:
+        pass
+
+    bot.send_message(
+        message.chat.id,
+        f"<b>Рассылка</b>\n\nКому: <b>{escape(str(label))}</b>\nПолучателей: <b>{len(targets)}</b>\n\nОтправить?",
+        reply_markup=admin_broadcast_post_keyboard(),
         disable_web_page_preview=True,
     )
 
@@ -949,11 +2441,24 @@ def handle_admin_visit_input(message: telebot.types.Message) -> None:
         )
         return
 
-    if not can_add_visit_today_tyumen(card.user_id):
+    admin_id = message.from_user.id if message.from_user else 0
+    # Block self-award.
+    if admin_id and int(admin_id) == int(card.user_id):
+        _pending_visit_add.pop(message.chat.id, None)
+        bot.send_message(
+            message.chat.id,
+            "Нельзя засчитать визит самому себе.",
+            reply_markup=admin_visit_done_keyboard(back_cb),
+            disable_web_page_preview=True,
+        )
+        return
+
+    if not can_add_visit_today_tyumen(card.user_id, source=BOT_SOURCE):
         _pending_visit_add.pop(message.chat.id, None)
         # Discount should still be shown even if visit can't be counted.
         current = find_card_by_user_id(card.user_id)
-        discount = current.discount if current is not None else card.discount
+        base_discount = current.discount if current is not None else card.discount
+        discount, _bonus = total_discount_for_user(card.user_id, int(base_discount))
         bot.send_message(
             message.chat.id,
             f"Сегодня уже визит был засчитан.\nМаксимум один визит в день.\nСкидка <b>{discount}%</b>",
@@ -962,13 +2467,13 @@ def handle_admin_visit_input(message: telebot.types.Message) -> None:
         )
         return
 
-    admin_id = message.from_user.id if message.from_user else 0
-    add_visit_marked(card.user_id, admin_id)
+    add_visit_marked(card.user_id, admin_id, source=BOT_SOURCE)
     # Keep a simple total counter on the client card, too.
     updated = add_visit_by_user_id(card.user_id, 1)
     _pending_visit_add.pop(message.chat.id, None)
 
-    discount = updated.discount if updated is not None else card.discount
+    base_discount = updated.discount if updated is not None else card.discount
+    discount, _bonus = total_discount_for_user(card.user_id, int(base_discount))
     bot.send_message(
         message.chat.id,
         f"Визит засчитан.\nСкидка <b>{discount}%</b>",
@@ -1022,7 +2527,22 @@ def handle_admin_demote(call: telebot.types.CallbackQuery) -> None:
 
     username = (call.data or "").split(":", 1)[1].strip()
     username = normalize_username(username)
+    # Try resolve user_id before removing.
+    uid = None
+    try:
+        rec = next((r for r in list_admins() if r.username == username), None)
+        uid = (int(rec.user_id) if (rec and rec.user_id) else None)
+    except Exception:
+        uid = None
+    if uid is None:
+        try:
+            uid = find_user_id_by_username(username)
+        except Exception:
+            uid = None
+
     remove_admin_by_username(username)
+    if uid is not None:
+        clear_staff_gold_by_user_id(uid)
 
     bot.send_message(
         call.message.chat.id,
@@ -1049,18 +2569,41 @@ def handle_guest_card(call: telebot.types.CallbackQuery) -> None:
     except Exception as e:
         bot.send_message(call.message.chat.id, f"Ошибка при открытии LEVEL: <code>{escape(str(e))}</code>")
 
-@bot.callback_query_handler(func=lambda call: call.data == "level_info")
-def handle_level_info(call: telebot.types.CallbackQuery) -> None:
+@bot.callback_query_handler(func=lambda call: (call.data or "").startswith("level_tab:"))
+def handle_level_tab(call: telebot.types.CallbackQuery) -> None:
     if not _callback_guard(call):
         return
     if call.message is None:
         return
-    bot.send_message(
-        call.message.chat.id,
-        level_info_text(),
-        reply_markup=level_info_keyboard(),
-        disable_web_page_preview=True,
-    )
+    user_id = call.from_user.id if call.from_user else None
+    registered = bool(user_id is not None and is_registered(user_id))
+    tab = (call.data or "").split(":", 1)[1].strip()
+    if tab not in {"card", "rating", "visits"}:
+        tab = "card"
+
+    if tab == "rating":
+        text = level_rating_text(superadmin=is_superadmin(user_id))
+    elif tab == "visits":
+        text = level_visits_text()
+    else:
+        text = level_card_message_text(call.from_user, user_id)
+
+    kb = level_keyboard(registered=registered, active=tab)
+    try:
+        bot.edit_message_text(
+            text,
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            reply_markup=kb,
+            disable_web_page_preview=True,
+        )
+    except Exception:
+        bot.send_message(
+            call.message.chat.id,
+            text,
+            reply_markup=kb,
+            disable_web_page_preview=True,
+        )
 
 
 @bot.callback_query_handler(func=lambda call: call.data == "main_location")
@@ -1131,7 +2674,7 @@ def handle_register_card_callback(call: telebot.types.CallbackQuery) -> None:
 
     bot.send_message(
         call.message.chat.id,
-        "Готово, карта гостя зарегистрирована.",
+        "Готово, карта <b>LEVEL</b> зарегистрирована.",
     )
     bot.send_message(
         call.message.chat.id,
@@ -1150,7 +2693,14 @@ def handle_back_callback(call: telebot.types.CallbackQuery) -> None:
     send_main_menu(call.message.chat.id, user=call.from_user)
 
 
-@bot.message_handler(func=lambda m: not (getattr(m, "text", "") or "").startswith("/"))
+@bot.message_handler(
+    func=lambda m: (
+        not (getattr(m, "text", "") or "").startswith("/")
+        and (m.chat is None or m.chat.id not in _pending_broadcast)
+        and (m.chat is None or m.chat.id not in _pending_admin_add)
+        and (m.chat is None or m.chat.id not in _pending_visit_add)
+    )
+)
 def handle_fallback(message: telebot.types.Message) -> None:
     if not _message_guard(message):
         return
@@ -1217,12 +2767,28 @@ def handle_inline_query(query: telebot.types.InlineQuery) -> None:
         return
 
     msg = level_card_inline_text(username=username, user_id=user_id)
+
+    # Keep inline results minimal: only one tappable row, no preview image, no extra descriptions.
+    card_res = telebot.types.InlineQueryResultArticle(
+        id=f"level:{user_id}",
+        title=f"🪪 КАРТА LEVEL @{username}",
+        description="Нажми",
+        input_message_content=telebot.types.InputTextMessageContent(
+            msg,
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+        ),
+    )
+    bot.answer_inline_query(query.id, [card_res], cache_time=1, is_personal=True)
+    return
+
+    # Fallback: text-only.
     article = telebot.types.InlineQueryResultArticle(
         id=f"level:{user_id}",
         title=f"КАРТА LEVEL @{username}",
         input_message_content=telebot.types.InputTextMessageContent(
             msg,
-            parse_mode=None,
+            parse_mode="HTML",
             disable_web_page_preview=True,
         ),
         description="Профиль гостя (LEVEL)",
@@ -1231,14 +2797,35 @@ def handle_inline_query(query: telebot.types.InlineQuery) -> None:
 
 
 if __name__ == "__main__":
-    bot.set_my_commands(
-        [
-            BotCommand("start", "Главное меню"),
-            BotCommand("level", "🪪 LEVEL"),
-            BotCommand("menu", "🧉 Меню"),
-            BotCommand("booking", "🛋 Бронь"),
-            BotCommand("location", "🚕 Найти нас"),
-        ]
-    )
-    # Be explicit to ensure inline queries are delivered to the bot.
-    bot.infinity_polling(skip_pending=True, allowed_updates=telebot.util.update_types)
+    # Keep the bot running even if Telegram API is temporarily unreachable
+    # (DNS, network hiccups, etc). Without this, a startup failure in setMyCommands
+    # can bring the whole bot down.
+    backoff_s = 2
+    while True:
+        try:
+            # Restore persisted broadcast state (if any).
+            _load_pending_broadcast()
+            try:
+                bot.set_my_commands(
+                    [
+                        BotCommand("start", "Главное меню"),
+                        BotCommand("level", "🪪 LEVEL"),
+                        BotCommand("menu", "🧉 Меню"),
+                        BotCommand("booking", "🛋 Бронь"),
+                        BotCommand("location", "🚕 Найти нас"),
+                        BotCommand("version", "Версия сборки"),
+                    ]
+                )
+            except Exception as e:
+                # Commands are optional; polling can still work.
+                log.warning("setMyCommands failed: %s", e)
+
+            # Be explicit to ensure inline queries are delivered to the bot.
+            log.info("Starting polling (skip_pending=%s)", True)
+            bot.infinity_polling(skip_pending=True, allowed_updates=telebot.util.update_types)
+        except KeyboardInterrupt:
+            raise
+        except Exception as e:
+            log.exception("polling crashed: %s", e)
+            time.sleep(backoff_s)
+            backoff_s = min(backoff_s * 2, 60)

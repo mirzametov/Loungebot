@@ -25,6 +25,7 @@ class LevelCard:
     level: str
     discount: int
     visits: int
+    staff_gold: bool
 
 
 def _load() -> dict[str, Any]:
@@ -59,6 +60,7 @@ def _to_card(card_number: str, rec: dict[str, Any]) -> LevelCard:
         level=str(rec.get("level") or "IRON⚙️"),
         discount=int(rec.get("discount", 3) or 3),
         visits=int(rec.get("visits", 0) or 0),
+        staff_gold=bool(rec.get("staff_gold", False)),
     )
 
 
@@ -87,6 +89,10 @@ def next_tier_info(visits: int) -> tuple[str, int] | None:
 
 
 def _recalc(rec: dict[str, Any]) -> None:
+    if bool(rec.get("staff_gold", False)):
+        rec["level"] = "GOLD🥇"
+        rec["discount"] = 10
+        return
     visits = int(rec.get("visits", 0) or 0)
     lvl, disc = tier_for_visits(visits)
     rec["level"] = lvl
@@ -171,6 +177,7 @@ def ensure_level_card(
         "level": "IRON⚙️",
         "discount": 3,
         "visits": 0,
+        "staff_gold": False,
     }
     _recalc(by_number[card_number])
     # Keep field for backward compatibility; not used for allocation anymore.
@@ -224,3 +231,67 @@ def add_visit_by_user_id(user_id: int, delta: int = 1) -> LevelCard | None:
     _recalc(rec)
     _save(data)
     return _to_card(str(num), rec)
+
+
+def set_staff_gold_by_user_id(
+    user_id: int,
+    *,
+    username: str | None = None,
+    first_name: str | None = None,
+    last_name: str | None = None,
+) -> LevelCard:
+    data = _load()
+    by_user = data.get("by_user") or {}
+    by_number = data.get("by_number") or {}
+    # Ensure card exists.
+    card = ensure_level_card(user_id, username=username, first_name=first_name, last_name=last_name)
+    num = by_user.get(str(int(user_id))) or card.card_number
+    rec = by_number.get(str(num))
+    if not isinstance(rec, dict):
+        # Shouldn't happen, but keep safe.
+        return card
+    rec["staff_gold"] = True
+    if username:
+        rec["username"] = username
+    if first_name:
+        rec["first_name"] = first_name
+    if last_name:
+        rec["last_name"] = last_name
+    _recalc(rec)
+    _save(data)
+    return _to_card(str(num), rec)
+
+
+def clear_staff_gold_by_user_id(user_id: int) -> LevelCard | None:
+    data = _load()
+    by_user = data.get("by_user") or {}
+    by_number = data.get("by_number") or {}
+    num = by_user.get(str(int(user_id)))
+    if not num:
+        return None
+    rec = by_number.get(str(num))
+    if not isinstance(rec, dict):
+        return None
+    rec["staff_gold"] = False
+    _recalc(rec)
+    _save(data)
+    return _to_card(str(num), rec)
+
+
+def list_cards() -> list[LevelCard]:
+    """
+    Returns all cards from storage (best-effort, unsorted).
+    """
+    data = _load()
+    by_number = data.get("by_number") or {}
+    out: list[LevelCard] = []
+    if not isinstance(by_number, dict):
+        return out
+    for num, rec in by_number.items():
+        if not isinstance(rec, dict):
+            continue
+        try:
+            out.append(_to_card(str(num), rec))
+        except Exception:
+            continue
+    return out

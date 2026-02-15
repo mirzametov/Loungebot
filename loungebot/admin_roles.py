@@ -71,6 +71,21 @@ def list_admins() -> list[AdminRecord]:
     return out
 
 
+def admin_user_ids() -> set[int]:
+    """
+    Returns admin user_ids that we already know (synced from Telegram updates).
+    """
+    ids: set[int] = set()
+    for rec in list_admins():
+        if rec.user_id is None:
+            continue
+        try:
+            ids.add(int(rec.user_id))
+        except Exception:
+            continue
+    return ids
+
+
 def sync_from_user(user_id: int, username: str | None, first_name: str | None, last_name: str | None) -> None:
     if not username:
         return

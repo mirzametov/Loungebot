@@ -4,3 +4,4 @@ __pycache__/
 .env
 bot.log
 data/*.json
+.bot.pid
