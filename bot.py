@@ -1831,7 +1831,7 @@ def level_rating_text(*, superadmin: bool) -> str:
     lines.append("")
     lines.append("<b>Награды месяца:</b>")
     lines.append("Топ-3 получают <b>настоящие</b> медали")
-    lines.append("Дополнительную <b>скидку</b> на апрель")
+    lines.append("Дополнительную <b>скидку</b> <b>на апрель</b>")
     return "\n".join(lines)
 
 
