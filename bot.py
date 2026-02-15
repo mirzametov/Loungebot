@@ -1760,19 +1760,19 @@ def handle_admin_stats(call: telebot.types.CallbackQuery) -> None:
     lines.append(f"Подписались за 7 дней: <b>{subs_7}</b>")
     lines.append(f"Подписались за 30 дней: <b>{subs_30}</b>")
 
-    # Cards issued by LEVEL tier (computed from current visits/staff flag).
+    # Cards issued by LEVEL tier (computed from current visits; exclude staff cards).
     cards = list_cards()
-    total_cards = len(cards)
+    staff_ids = _staff_user_ids_known()
     c_iron = 0
     c_bronze = 0
     c_silver = 0
     c_gold = 0
     for c in cards:
         try:
-            if bool(getattr(c, "staff_gold", False)):
-                lvl = "GOLD🥇"
-            else:
-                lvl, _disc = tier_for_visits(int(getattr(c, "visits", 0) or 0))
+            uid = int(getattr(c, "user_id", 0) or 0)
+            if uid in staff_ids:
+                continue
+            lvl, _disc = tier_for_visits(int(getattr(c, "visits", 0) or 0))
         except Exception:
             lvl = "IRON⚙️"
         if str(lvl).startswith("GOLD"):
@@ -1785,11 +1785,11 @@ def handle_admin_stats(call: telebot.types.CallbackQuery) -> None:
             c_iron += 1
 
     lines.append("")
-    lines.append(f"🪪 Карты LEVEL выдано: <b>{total_cards}</b>")
-    lines.append(f"⚙️ IRON: <b>{c_iron}</b>")
-    lines.append(f"🥉 BRONZE: <b>{c_bronze}</b>")
-    lines.append(f"🥈 SILVER: <b>{c_silver}</b>")
-    lines.append(f"🥇 GOLD: <b>{c_gold}</b>")
+    lines.append(f"🪪 Выдано карт <b>LEVEL</b>")
+    lines.append(f"<b>⚙️ IRON: {c_iron}</b>")
+    lines.append(f"<b>🥉 BRONZE: {c_bronze}</b>")
+    lines.append(f"<b>🥈 SILVER: {c_silver}</b>")
+    lines.append(f"<b>🥇 GOLD: {c_gold}</b>")
     lines.append("")
     lines.append("<b>Топ подписчиков по кликам (ТОП-10)</b>")
 
