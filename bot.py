@@ -2949,7 +2949,7 @@ def handle_menu_sections(call: telebot.types.CallbackQuery) -> None:
                 "• Клубника - лемонграсс\n"
                 "• Груша - персик - юдзу\n"
                 "• Манго - маракуйя\n"
-                "• Мохито классик"
+                "• Мохито"
             )
             if not show_drinks_rules:
                 return base
