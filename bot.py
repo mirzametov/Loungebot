@@ -514,8 +514,8 @@ def pitbike_keyboard() -> InlineKeyboardMarkup:
 
 
 def send_pitbike_photo(chat_id: int) -> None:
-    # Photo #3 is the pitbike shot.
-    p = _interior_photo_path(3)
+    # Photo #1 is the pitbike shot.
+    p = _interior_photo_path(1)
     if not p.exists():
         bot.send_message(chat_id, "Фото питбайка не найдено.")
         return
