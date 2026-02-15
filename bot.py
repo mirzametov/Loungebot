@@ -1275,15 +1275,46 @@ def _admin_label(username: str, first_name: str | None, last_name: str | None) -
 
 def admins_list_keyboard(back_cb: str = "admin_admins") -> InlineKeyboardMarkup:
     keyboard = InlineKeyboardMarkup()
-    for rec in list_admins():
+    admins = list_admins()
+    for rec in admins:
         keyboard.row(
             InlineKeyboardButton(
                 text=_admin_label(rec.username, rec.first_name, rec.last_name),
                 callback_data=f"admin_view:{rec.username}",
             )
         )
+
+    # Also show superadmins in this list (without any extra wording).
+    admin_usernames = {normalize_username(r.username) for r in admins}
+    for sid in sorted(_superadmin_ids()):
+        stats = get_user_stats(int(sid)) or {}
+        u = stats.get("username")
+        if isinstance(u, str):
+            u = normalize_username(u)
+        else:
+            u = ""
+        # Avoid duplicates if a superadmin is also stored as an admin record.
+        if u and u in admin_usernames:
+            continue
+        first = (stats.get("first_name") or "").strip() or None
+        last = (stats.get("last_name") or "").strip() or None
+        name = " ".join([x for x in [first or "", last or ""] if x]).strip()
+        if u:
+            label = _admin_label(u, first, last)
+        else:
+            label = name or str(sid)
+        keyboard.row(InlineKeyboardButton(text=label, callback_data=f"admin_viewid:{int(sid)}"))
     keyboard.row(
         InlineKeyboardButton(text="👈Назад", callback_data=back_cb),
+        InlineKeyboardButton(text="🏠 Домой", callback_data="back_to_main"),
+    )
+    return keyboard
+
+
+def admin_view_readonly_keyboard() -> InlineKeyboardMarkup:
+    keyboard = InlineKeyboardMarkup()
+    keyboard.row(
+        InlineKeyboardButton(text="👈Назад", callback_data="admin_admins_list"),
         InlineKeyboardButton(text="🏠 Домой", callback_data="back_to_main"),
     )
     return keyboard
@@ -1313,6 +1344,26 @@ def admin_view_paged_keyboard(username: str, *, offset: int, total: int, page_si
             buttons.append(InlineKeyboardButton(text="➡️", callback_data=f"admin_viewp:{username}:{next_off}"))
         keyboard.row(*buttons)
     keyboard.row(InlineKeyboardButton(text="😔 Разжаловать", callback_data=f"admin_demote:{username}"))
+    keyboard.row(
+        InlineKeyboardButton(text="👈Назад", callback_data="admin_admins_list"),
+        InlineKeyboardButton(text="🏠 Домой", callback_data="back_to_main"),
+    )
+    return keyboard
+
+
+def admin_viewid_paged_keyboard(user_id: int, *, offset: int, total: int, page_size: int = 20) -> InlineKeyboardMarkup:
+    keyboard = InlineKeyboardMarkup()
+    has_prev = offset > 0
+    has_next = (offset + page_size) < total
+    if has_prev or has_next:
+        prev_off = max(0, offset - page_size)
+        next_off = offset + page_size
+        buttons = []
+        if has_prev:
+            buttons.append(InlineKeyboardButton(text="⬅️", callback_data=f"admin_viewidp:{int(user_id)}:{prev_off}"))
+        if has_next:
+            buttons.append(InlineKeyboardButton(text="➡️", callback_data=f"admin_viewidp:{int(user_id)}:{next_off}"))
+        keyboard.row(*buttons)
     keyboard.row(
         InlineKeyboardButton(text="👈Назад", callback_data="admin_admins_list"),
         InlineKeyboardButton(text="🏠 Домой", callback_data="back_to_main"),
@@ -1379,6 +1430,69 @@ def _send_admin_view(chat_id: int, *, username: str, offset: int = 0) -> None:
         chat_id,
         "\n".join(lines),
         reply_markup=admin_view_paged_keyboard(rec.username, offset=offset, total=total),
+        disable_web_page_preview=True,
+    )
+
+
+def _send_admin_view_by_id(chat_id: int, *, user_id: int, offset: int = 0) -> None:
+    uid = int(user_id)
+    stats = get_user_stats(uid) or {}
+    uname = stats.get("username")
+    if isinstance(uname, str):
+        uname = normalize_username(uname)
+    else:
+        uname = None
+
+    first = (stats.get("first_name") or "").strip()
+    last = (stats.get("last_name") or "").strip()
+    name = " ".join([x for x in [first, last] if x]).strip()
+
+    lines: list[str] = []
+    lines.append("<b>Админ</b>")
+    lines.append("")
+    if name:
+        lines.append(f"Имя: <b>{escape(name)}</b>")
+    if uname:
+        lines.append(f"Ник: <b>@{escape(uname)}</b>")
+    else:
+        lines.append(f"ID: <b>{uid}</b>")
+
+    v_today, v_7, v_30, v_total = admin_marked_visits_summary(uid, source=BOT_SOURCE)
+    lines.append("")
+    lines.append("<b>Рейтинг</b>")
+    lines.append(f"Визитов за сегодня: <b>{v_today}</b>")
+    lines.append(f"Визитов за 7 дней: <b>{v_7}</b>")
+    lines.append(f"Визитов за 30 дней: <b>{v_30}</b>")
+    lines.append(f"Всего визитов: <b>{v_total}</b>")
+
+    lines.append("")
+    lines.append("<b>Последние отмеченные</b>")
+    recent, total = admin_marked_recent_clients_page(uid, source=BOT_SOURCE, offset=offset, limit=20)
+    if not recent:
+        lines.append("Нет данных.")
+    else:
+        for row in recent:
+            cuid = int(row["user_id"])
+            cstats = get_user_stats(cuid) or {}
+            cuname = cstats.get("username")
+            if isinstance(cuname, str):
+                cuname = cuname.strip().lstrip("@") or None
+            else:
+                cuname = None
+            clabel = cstats.get("first_name") or cuname or str(cuid)
+            clabel = escape(str(clabel))
+            card = find_card_by_user_id(cuid)
+            if card:
+                lines.append(
+                    f'• <a href="{_tg_user_link(cuid, cuname)}">{clabel}</a> — карта <b>{escape(card.card_number)}</b>'
+                )
+            else:
+                lines.append(f'• <a href="{_tg_user_link(cuid, cuname)}">{clabel}</a>')
+
+    bot.send_message(
+        chat_id,
+        "\n".join(lines),
+        reply_markup=admin_viewid_paged_keyboard(uid, offset=offset, total=total),
         disable_web_page_preview=True,
     )
 
@@ -2514,6 +2628,22 @@ def handle_admin_view(call: telebot.types.CallbackQuery) -> None:
     _send_admin_view(call.message.chat.id, username=username, offset=0)
 
 
+@bot.callback_query_handler(func=lambda call: (call.data or "").startswith("admin_viewid:"))
+def handle_admin_viewid(call: telebot.types.CallbackQuery) -> None:
+    if not _callback_guard(call):
+        return
+    if call.message is None:
+        return
+    if not is_superadmin(call.from_user.id if call.from_user else None):
+        return
+
+    try:
+        uid = int((call.data or "").split(":", 1)[1].strip())
+    except Exception:
+        return
+    _send_admin_view_by_id(call.message.chat.id, user_id=uid, offset=0)
+
+
 @bot.callback_query_handler(func=lambda call: (call.data or "").startswith("admin_viewp:"))
 def handle_admin_view_paged(call: telebot.types.CallbackQuery) -> None:
     if not _callback_guard(call):
@@ -2532,6 +2662,29 @@ def handle_admin_view_paged(call: telebot.types.CallbackQuery) -> None:
     except Exception:
         offset = 0
     _send_admin_view(call.message.chat.id, username=username, offset=offset)
+
+
+@bot.callback_query_handler(func=lambda call: (call.data or "").startswith("admin_viewidp:"))
+def handle_admin_viewid_paged(call: telebot.types.CallbackQuery) -> None:
+    if not _callback_guard(call):
+        return
+    if call.message is None:
+        return
+    if not is_superadmin(call.from_user.id if call.from_user else None):
+        return
+
+    parts = (call.data or "").split(":", 2)
+    if len(parts) != 3:
+        return
+    try:
+        uid = int(parts[1])
+    except Exception:
+        return
+    try:
+        offset = int(parts[2])
+    except Exception:
+        offset = 0
+    _send_admin_view_by_id(call.message.chat.id, user_id=uid, offset=offset)
 
 
 @bot.callback_query_handler(func=lambda call: (call.data or "").startswith("admin_demote:"))
