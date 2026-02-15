@@ -439,9 +439,10 @@ def level_keyboard(*, registered: bool, active: str) -> InlineKeyboardMarkup:
 
     keyboard.row(_tab("🪪 Карта LEVEL", "card"), _tab("🏆 Рейтинг", "rating"))
     keyboard.row(
-        InlineKeyboardButton(text="👈Назад", callback_data="back_to_main"),
+        _tab("🔥 Розыгрыш", "giveaway"),
         _tab("ℹ️ Инфо", "visits"),
     )
+    keyboard.row(InlineKeyboardButton(text="👈Назад", callback_data="back_to_main"))
     return keyboard
 
 
@@ -1746,6 +1747,17 @@ def level_visits_text() -> str:
     )
 
 
+def level_giveaway_text() -> str:
+    return (
+        "<b>Розыгрыш</b>\n\n"
+        "В конце года разыгрываем призы среди гостей с картами <b>LEVEL</b> уровня <b>SILVER</b> и <b>GOLD</b>\n\n"
+        "🥇 Тот самый питбайк\n"
+        f"🥈 Сертификат <b><a href=\"{PROHVAT72_URL}\">Прохват72</a></b>\n"
+        f"🥉 Сертификат <b><a href=\"{NEWS_URL}\">На Грани Lounge</a></b>\n\n"
+        "Повышай уровень и участвуй в розыгрыше"
+    )
+
+
 def _level_rating_name(card: LevelCard) -> tuple[str, str | None]:
     uname = (card.username or "").strip().lstrip("@") or None
     name = " ".join([x for x in [(card.first_name or "").strip(), (card.last_name or "").strip()] if x]).strip()
@@ -2841,11 +2853,13 @@ def handle_level_tab(call: telebot.types.CallbackQuery) -> None:
     user_id = call.from_user.id if call.from_user else None
     registered = bool(user_id is not None and is_registered(user_id))
     tab = (call.data or "").split(":", 1)[1].strip()
-    if tab not in {"card", "rating", "visits"}:
+    if tab not in {"card", "rating", "visits", "giveaway"}:
         tab = "card"
 
     if tab == "rating":
         text = level_rating_text(superadmin=is_superadmin(user_id))
+    elif tab == "giveaway":
+        text = level_giveaway_text()
     elif tab == "visits":
         text = level_visits_text()
     else:
