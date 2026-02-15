@@ -1767,8 +1767,13 @@ def send_location_menu(chat_id: int) -> None:
 def send_food_menu(chat_id: int) -> None:
     bot.send_message(
         chat_id,
-        "Выбери раздел меню:",
-        reply_markup=menu_inline_keyboard(active=None),
+        "До 17:00 - 1 000₽\n"
+        "После 17:00 - 1 400₽\n\n"
+        "Соберём вкус и крепость под тебя. Работаем на премиальных табаках.\n\n"
+        "Если за столом более четырёх гостей, необходимо заказать 2 кальяна единовременно, если более шести - 3 кальяна\n\n"
+        "С 19:00 действует правило - 2 часа на один кальян",
+        reply_markup=menu_inline_keyboard(active="menu_hookah"),
+        disable_web_page_preview=True,
     )
 
 
