@@ -492,7 +492,7 @@ def menu_inline_keyboard(
 
     keyboard.row(_tab("💨 Кальян", "menu_hookah"), _tab("🍵 Чай", "menu_tea"))
     keyboard.row(_tab("🥤 Напитки", "menu_drinks"), _tab("🍽 Еда", "menu_food"))
-    keyboard.row(InlineKeyboardButton(text="👈 Назад", callback_data="back_to_main"), _tab("Правила", "menu_rules"))
+    keyboard.row(InlineKeyboardButton(text="👈 Назад", callback_data="back_to_main"), _tab("🍷Алкоголь", "menu_rules"))
 
     return keyboard
 
