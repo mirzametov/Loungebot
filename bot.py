@@ -2978,7 +2978,11 @@ def handle_menu_sections(call: telebot.types.CallbackQuery) -> None:
             reply_markup=kb,
             disable_web_page_preview=True,
         )
-    except Exception:
+    except Exception as e:
+        # If user taps the already-selected tab, Telegram replies "message is not modified".
+        # In that case do nothing (no duplicate messages).
+        if "message is not modified" in str(e).lower():
+            return
         bot.send_message(call.message.chat.id, text, reply_markup=kb, disable_web_page_preview=True)
 
 
