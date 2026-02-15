@@ -2967,7 +2967,7 @@ def handle_menu_sections(call: telebot.types.CallbackQuery) -> None:
                 "• Мохито"
             )
             if not show_drinks_rules:
-                return base
+                return f"{base}\n\nК нам нельзя со своими безалкогольными напитками"
             rules = (
                 "К нам нельзя со своими безалкогольными напитками\n\n"
                 "Мы предоставляем всё необходимое для комфортного распития: бокалы, лёд, штопор.\n\n"
