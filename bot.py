@@ -1785,10 +1785,40 @@ def level_rating_text(*, superadmin: bool) -> str:
 
     # Leaderboard launches from March 1st. Before that, show empty slots.
     LAUNCH = datetime(2026, 3, 1, 0, 0, 0, tzinfo=tz)  # type: ignore[arg-type]
-    # Current promo: show March rating card (starts March 1st).
-    show_month_year = 2026
-    show_month = 3
-    m_nom = "март"
+
+    month_names = {
+        1: "январь",
+        2: "февраль",
+        3: "март",
+        4: "апрель",
+        5: "май",
+        6: "июнь",
+        7: "июль",
+        8: "август",
+        9: "сентябрь",
+        10: "октябрь",
+        11: "ноябрь",
+        12: "декабрь",
+    }
+
+    def _month_name(m: int) -> str:
+        return str(month_names.get(int(m), ""))
+
+    def _next_month(y: int, m: int) -> tuple[int, int]:
+        y = int(y)
+        m = int(m)
+        if m >= 12:
+            return (y + 1, 1)
+        return (y, m + 1)
+
+    # Before launch: always show March (starts March 1st).
+    if now < LAUNCH:
+        show_month_year, show_month = 2026, 3
+    else:
+        show_month_year, show_month = now.year, now.month
+    m_nom = _month_name(show_month)
+    _ny, next_m = _next_month(show_month_year, show_month)
+    next_m_name = _month_name(next_m)
 
     staff = _staff_user_ids_known()
     rows: list[dict] = []
@@ -1835,7 +1865,7 @@ def level_rating_text(*, superadmin: bool) -> str:
     lines.append("")
     lines.append("<b>Награды месяца:</b>")
     lines.append("Топ-3 получают <b>настоящие</b> медали")
-    lines.append("Дополнительную <b>скидку</b> <b>на апрель</b>")
+    lines.append(f"Дополнительную <b>скидку</b> <b>на {escape(next_m_name)}</b>")
     return "\n".join(lines)
 
 
