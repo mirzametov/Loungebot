@@ -1798,6 +1798,7 @@ def send_food_menu(chat_id: int) -> None:
         return
     bot.send_message(
         chat_id,
+        "<b>КАЛЬЯН</b>\n\n"
         "<b>До 17:00 - 1 000₽</b>\n"
         "<b>После 17:00 - 1 400₽</b>\n\n"
         "Соберём вкус и крепость под тебя. Работаем на премиальных табаках\n\n"
@@ -2905,6 +2906,7 @@ def handle_menu_sections(call: telebot.types.CallbackQuery) -> None:
     def _text(cb: str, *, show_drinks_rules: bool) -> str:
         if cb == "menu_hookah":
             return (
+                "<b>КАЛЬЯН</b>\n\n"
                 "<b>До 17:00 - 1 000₽</b>\n"
                 "<b>После 17:00 - 1 400₽</b>\n\n"
                 "Соберём вкус и крепость под тебя. Работаем на премиальных табаках\n\n"
