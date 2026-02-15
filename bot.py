@@ -1571,39 +1571,10 @@ def level_rating_text(*, superadmin: bool) -> str:
 
     # Leaderboard launches from March 1st. Before that, show empty slots.
     LAUNCH = datetime(2026, 3, 1, 0, 0, 0, tzinfo=tz)  # type: ignore[arg-type]
-    show_month_year = LAUNCH.year if now < LAUNCH else now.year
-    show_month = 3 if now < LAUNCH else now.month
-
-    month_nom = [
-        "январь",
-        "февраль",
-        "март",
-        "апрель",
-        "май",
-        "июнь",
-        "июль",
-        "август",
-        "сентябрь",
-        "октябрь",
-        "ноябрь",
-        "декабрь",
-    ]
-    month_gen = [
-        "января",
-        "февраля",
-        "марта",
-        "апреля",
-        "мая",
-        "июня",
-        "июля",
-        "августа",
-        "сентября",
-        "октября",
-        "ноября",
-        "декабря",
-    ]
-    m_nom = month_nom[show_month - 1] if 1 <= show_month <= 12 else "месяц"
-    m_gen = month_gen[show_month - 1] if 1 <= show_month <= 12 else "месяца"
+    # Current promo: show March rating card (starts March 1st).
+    show_month_year = 2026
+    show_month = 3
+    m_nom = "март"
 
     staff = _staff_user_ids_known()
     rows: list[dict] = []
@@ -1616,7 +1587,7 @@ def level_rating_text(*, superadmin: bool) -> str:
         medals = {1: "🥇", 2: "🥈", 3: "🥉"}
         prefix = medals.get(place, f"{place}.")
         if not row:
-            return f"{prefix} — свободно"
+            return f"{prefix} - свободно"
         uid = int(row.get("user_id") or 0)
         # Do not make winners clickable (avoid random users DM'ing them).
         # Use Telegram profile name (cached in admin_stats when user interacts with the bot).
@@ -1632,13 +1603,13 @@ def level_rating_text(*, superadmin: bool) -> str:
             else:
                 uname = None
             link = _tg_user_link(uid, uname)
-            return f'{prefix} — <a href="{link}"><b>{escape(str(label))}</b></a>'
-        return f"{prefix} — <b>{escape(str(label))}</b>"
+            return f'{prefix} - <a href="{link}"><b>{escape(str(label))}</b></a>'
+        return f"{prefix} - <b>{escape(str(label))}</b>"
 
     lines: list[str] = []
     lines.append("<b>🏆 Рейтинг гостей</b>")
     lines.append("")
-    lines.append(f"Топ по визитам за <b>{escape(m_nom)}</b>")
+    lines.append(f"Топ по визитам за <b>{escape(m_nom)}</b> в баре")
     if now < LAUNCH:
         lines.append("(Стартуем 1 марта)")
     lines.append("")
@@ -1649,12 +1620,8 @@ def level_rating_text(*, superadmin: bool) -> str:
     lines.append("Стань первым лидером бара.")
     lines.append("")
     lines.append("<b>Награды месяца:</b>")
-    lines.append("Топ-3 получают настоящие медали")
-    lines.append("")
-    lines.append("Дополнительную скидку на следующий месяц")
-    lines.append("")
-    lines.append("🏁 Все призёры участвуют")
-    lines.append("в розыгрыше питбайка из бара.")
+    lines.append("Топ-3 получают <b>настоящие</b> медали")
+    lines.append("Дополнительную <b>скидку</b> на апрель")
     return "\n".join(lines)
 
 
