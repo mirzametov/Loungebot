@@ -2332,7 +2332,13 @@ def handle_admin_add_input(message: telebot.types.Message) -> None:
         "animation",
         "sticker",
     ],
-    func=lambda m: m.chat is not None and m.chat.id in _pending_broadcast,
+    # If other input flows are active (add-visit / add-admin), don't let broadcast capture the message.
+    func=lambda m: (
+        m.chat is not None
+        and m.chat.id in _pending_broadcast
+        and m.chat.id not in _pending_visit_add
+        and m.chat.id not in _pending_admin_add
+    ),
 )
 def handle_admin_broadcast_text(message: telebot.types.Message) -> None:
     if not _message_guard(message):
@@ -2409,6 +2415,9 @@ def handle_admin_add_visit(call: telebot.types.CallbackQuery) -> None:
     back_cb = "admin_menu" if call.data == "admin_add_visit" else "admin_admins"
     _pending_visit_add[call.message.chat.id] = back_cb
     _pending_admin_add.discard(call.message.chat.id)
+    # If a broadcast flow was started in this chat, cancel it to avoid swallowing card-number input.
+    _pending_broadcast.pop(call.message.chat.id, None)
+    _save_pending_broadcast()
     bot.send_message(
         call.message.chat.id,
         "<b>ВВЕДИ НОМЕР КАРТЫ LEVEL</b>",
