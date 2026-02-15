@@ -494,13 +494,6 @@ def menu_inline_keyboard(
     keyboard.row(_tab("🥤 Напитки", "menu_drinks"), _tab("🍽 Еда", "menu_food"))
     keyboard.row(InlineKeyboardButton(text="👈 Назад", callback_data="back_to_main"), _tab("Правила", "menu_rules"))
 
-    # Drinks: reveal rules on tap.
-    if active == "menu_drinks":
-        cb = "menu_drinks_rules"
-        if drinks_rules:
-            keyboard.row(_StyledInlineButton(text="Правила", callback_data=cb, style="primary"))  # type: ignore[arg-type]
-        else:
-            keyboard.row(InlineKeyboardButton(text="Правила", callback_data=cb))
     return keyboard
 
 
@@ -2892,7 +2885,6 @@ def handle_menu(call: telebot.types.CallbackQuery) -> None:
 @bot.callback_query_handler(
     func=lambda call: (
         (call.data in {"menu_hookah", "menu_tea", "menu_drinks", "menu_food", "menu_watch", "menu_rules"})
-        or (call.data == "menu_drinks_rules")
     )
 )
 def handle_menu_sections(call: telebot.types.CallbackQuery) -> None:
@@ -2909,9 +2901,6 @@ def handle_menu_sections(call: telebot.types.CallbackQuery) -> None:
     raw = call.data or ""
     drinks_rules = False
     section_cb = raw
-    if raw == "menu_drinks_rules":
-        section_cb = "menu_drinks"
-        drinks_rules = True
 
     def _text(cb: str, *, show_drinks_rules: bool) -> str:
         if cb == "menu_hookah":
