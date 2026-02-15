@@ -1155,6 +1155,14 @@ def _callback_guard(call: telebot.types.CallbackQuery, window_s: float = 1.5) ->
         return False
 
     try:
+        # If a broadcast flow is pending and user navigates anywhere outside broadcast UI,
+        # cancel it immediately. This prevents "stuck" broadcast state from swallowing input.
+        chat_id = call.message.chat.id
+        data0 = (call.data or "").strip()
+        if chat_id in _pending_broadcast and not data0.startswith("admin_broadcast"):
+            _pending_broadcast.pop(chat_id, None)
+            _save_pending_broadcast()
+
         user_id = call.from_user.id if call.from_user else 0
         data = call.data or ""
         msg_id = call.message.message_id
@@ -1855,6 +1863,7 @@ def handle_admin_broadcast(call: telebot.types.CallbackQuery) -> None:
         return
 
     _pending_broadcast.pop(call.message.chat.id, None)
+    _save_pending_broadcast()
     bot.send_message(
         call.message.chat.id,
         "<b>Рассылка</b>\n\nВыбери, кому отправлять:",
@@ -1873,6 +1882,7 @@ def handle_admin_broadcast_create(call: telebot.types.CallbackQuery) -> None:
 
     # Backward-compat: old UI entry.
     _pending_broadcast.pop(call.message.chat.id, None)
+    _save_pending_broadcast()
     bot.send_message(
         call.message.chat.id,
         "<b>Рассылка</b>\n\nВыбери, кому отправлять:",
