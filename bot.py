@@ -440,7 +440,7 @@ def level_keyboard(*, registered: bool, active: str) -> InlineKeyboardMarkup:
     keyboard.row(_tab("🪪 Карта LEVEL", "card"), _tab("🏆 Рейтинг", "rating"))
     keyboard.row(
         _tab("🔥 Розыгрыш", "giveaway"),
-        _tab("ℹ️ Инфо", "visits"),
+        _tab("📜 Условия", "visits"),
     )
     keyboard.row(InlineKeyboardButton(text="👈Назад", callback_data="back_to_main"))
     return keyboard
