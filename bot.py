@@ -2939,6 +2939,7 @@ def handle_level_tab(call: telebot.types.CallbackQuery) -> None:
             message_id=call.message.message_id,
             reply_markup=kb,
             disable_web_page_preview=True,
+            parse_mode="HTML",
         )
     except Exception:
         bot.send_message(
@@ -2946,6 +2947,7 @@ def handle_level_tab(call: telebot.types.CallbackQuery) -> None:
             text,
             reply_markup=kb,
             disable_web_page_preview=True,
+            parse_mode="HTML",
         )
 
 
