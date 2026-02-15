@@ -321,6 +321,28 @@ def is_superadmin(user_id: int | None) -> bool:
     return int(user_id) in ids
 
 
+def _menu_owner_id() -> int:
+    """
+    Temporary safety switch: allow menu only for one owner user_id.
+    """
+    raw = os.getenv("MENU_OWNER_ID", "").strip()
+    if raw:
+        try:
+            return int(raw)
+        except Exception:
+            pass
+    return 864921585
+
+
+def is_menu_allowed(user_id: int | None) -> bool:
+    if user_id is None:
+        return False
+    try:
+        return int(user_id) == _menu_owner_id()
+    except Exception:
+        return False
+
+
 def _tg_user_link(user_id: int, username: str | None = None) -> str:
     # `tg://user?id=` is flaky on some Telegram clients for users other than yourself.
     # Prefer a public @username link when available.
@@ -1790,6 +1812,9 @@ def send_location_menu(chat_id: int) -> None:
 
 
 def send_food_menu(chat_id: int) -> None:
+    if not is_menu_allowed(chat_id):
+        bot.send_message(chat_id, "Меню временно недоступно.")
+        return
     bot.send_message(
         chat_id,
         "До 17:00 - 1 000₽\n"
@@ -2855,6 +2880,10 @@ def handle_main_add_visit(call: telebot.types.CallbackQuery) -> None:
 def handle_menu(call: telebot.types.CallbackQuery) -> None:
     if not _callback_guard(call):
         return
+    if not is_menu_allowed(call.from_user.id if call.from_user else None):
+        if call.message is not None:
+            bot.send_message(call.message.chat.id, "Меню временно недоступно.")
+        return
     send_food_menu(call.message.chat.id)
 
 
@@ -2867,6 +2896,10 @@ def handle_menu(call: telebot.types.CallbackQuery) -> None:
 )
 def handle_menu_sections(call: telebot.types.CallbackQuery) -> None:
     if not _callback_guard(call):
+        return
+    if not is_menu_allowed(call.from_user.id if call.from_user else None):
+        if call.message is not None:
+            bot.send_message(call.message.chat.id, "Меню временно недоступно.")
         return
 
     if call.message is None:
