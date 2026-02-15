@@ -2820,6 +2820,15 @@ def handle_menu_sections(call: telebot.types.CallbackQuery) -> None:
     if not _callback_guard(call):
         return
 
+    if call.data == "menu_food":
+        bot.send_message(
+            call.message.chat.id,
+            "Со своей едой - можно\n\n"
+            "Голодными не оставим, подскажем быструю доставку🚚",
+            reply_markup=menu_inline_keyboard(),
+        )
+        return
+
     label_map = {
         "menu_hookah": "Кальяны",
         "menu_drinks": "Выпивка",
