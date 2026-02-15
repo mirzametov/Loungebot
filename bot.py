@@ -456,6 +456,55 @@ def location_inline_keyboard() -> InlineKeyboardMarkup:
     return keyboard
 
 
+INTERIOR_DIR = Path("assets/interior")
+INTERIOR_COUNT = 8
+
+
+def _interior_photo_path(idx: int) -> Path:
+    i = int(idx)
+    if i < 1:
+        i = 1
+    if i > INTERIOR_COUNT:
+        i = INTERIOR_COUNT
+    return INTERIOR_DIR / f"{i}.jpg"
+
+
+def interior_keyboard(idx: int) -> InlineKeyboardMarkup:
+    i = int(idx)
+    if i < 1:
+        i = 1
+    if i > INTERIOR_COUNT:
+        i = INTERIOR_COUNT
+
+    kb = InlineKeyboardMarkup()
+
+    # Navigation row
+    if i == 1:
+        kb.row(InlineKeyboardButton(text="Следующая", callback_data="interior:2"))
+    elif i == INTERIOR_COUNT:
+        kb.row(InlineKeyboardButton(text="Предыдущая", callback_data=f"interior:{INTERIOR_COUNT - 1}"))
+    else:
+        kb.row(
+            InlineKeyboardButton(text="⬅️", callback_data=f"interior:{i - 1}"),
+            InlineKeyboardButton(text="➡️", callback_data=f"interior:{i + 1}"),
+        )
+
+    kb.row(
+        InlineKeyboardButton(text="👈 Назад", callback_data="interior_back"),
+        InlineKeyboardButton(text="🏠 Домой", callback_data="back_to_main"),
+    )
+    return kb
+
+
+def send_interior(chat_id: int, *, idx: int) -> None:
+    p = _interior_photo_path(idx)
+    if not p.exists():
+        bot.send_message(chat_id, "Фото интерьера не найдено.", reply_markup=location_inline_keyboard())
+        return
+    with p.open("rb") as f:
+        bot.send_photo(chat_id, f, reply_markup=interior_keyboard(idx))
+
+
 def menu_inline_keyboard(
     *,
     active: str | None = None,
@@ -2833,12 +2882,57 @@ def handle_location_interior(call: telebot.types.CallbackQuery) -> None:
         return
     if call.message is None:
         return
-    bot.send_message(
-        call.message.chat.id,
-        "Раздел «Интерьер» находится в разработке 🚧",
-        reply_markup=location_inline_keyboard(),
-        disable_web_page_preview=True,
-    )
+    send_interior(call.message.chat.id, idx=1)
+
+
+@bot.callback_query_handler(func=lambda call: (call.data or "").startswith("interior:"))
+def handle_interior_nav(call: telebot.types.CallbackQuery) -> None:
+    if not _callback_guard(call):
+        return
+    if call.message is None:
+        return
+    try:
+        idx = int((call.data or "").split(":", 1)[1].strip())
+    except Exception:
+        idx = 1
+
+    p = _interior_photo_path(idx)
+    kb = interior_keyboard(idx)
+    if not p.exists():
+        bot.send_message(call.message.chat.id, "Фото интерьера не найдено.", reply_markup=location_inline_keyboard())
+        return
+
+    try:
+        media = telebot.types.InputMediaPhoto(telebot.types.InputFile(p))
+        bot.edit_message_media(
+            media,
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            reply_markup=kb,
+        )
+    except Exception as e:
+        # Ignore "message is not modified" to prevent spam on repeated taps.
+        if "message is not modified" in str(e).lower():
+            return
+        # Fallback: replace message (best-effort).
+        try:
+            bot.delete_message(call.message.chat.id, call.message.message_id)
+        except Exception:
+            pass
+        send_interior(call.message.chat.id, idx=idx)
+
+
+@bot.callback_query_handler(func=lambda call: call.data == "interior_back")
+def handle_interior_back(call: telebot.types.CallbackQuery) -> None:
+    if not _callback_guard(call):
+        return
+    if call.message is None:
+        return
+    try:
+        bot.delete_message(call.message.chat.id, call.message.message_id)
+    except Exception:
+        pass
+    send_location_menu(call.message.chat.id)
 
 @bot.callback_query_handler(func=lambda call: call.data == "main_add_visit")
 def handle_main_add_visit(call: telebot.types.CallbackQuery) -> None:
