@@ -938,7 +938,8 @@ load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 BOT_SOURCE = (os.getenv("BOT_SOURCE", "lounge") or "lounge").strip().lower()
 WELCOME_IMAGE_PATH = os.getenv("WELCOME_IMAGE_PATH", "assets/lounge_source.jpg")
-INLINE_IMAGE_PATH = os.getenv("INLINE_IMAGE_PATH", "/Users/evgensuperman/Desktop/ng.JPG")
+# Inline preview image (should exist on VPS too). By default reuse the main welcome image.
+INLINE_IMAGE_PATH = os.getenv("INLINE_IMAGE_PATH", WELCOME_IMAGE_PATH)
 GUEST_CARD_URL = os.getenv("GUEST_CARD_URL", "https://example.com/guest-card")
 MENU_URL = os.getenv("MENU_URL", "https://example.com/menu")
 BOOKING_URL = os.getenv("BOOKING_URL", "https://example.com/booking")
@@ -2789,32 +2790,44 @@ def handle_inline_query(query: telebot.types.InlineQuery) -> None:
 
     msg = level_card_inline_text(username=username, user_id=user_id)
 
-    # Keep inline results minimal: only one tappable row, no preview image, no extra descriptions.
-    card_res = telebot.types.InlineQueryResultArticle(
-        id=f"level:{user_id}",
-        title=f"🪪 КАРТА LEVEL @{username}",
-        description="Нажми",
-        input_message_content=telebot.types.InputTextMessageContent(
-            msg,
-            parse_mode="HTML",
-            disable_web_page_preview=True,
-        ),
-    )
-    bot.answer_inline_query(query.id, [card_res], cache_time=1, is_personal=True)
-    return
+    results: list[telebot.types.InlineQueryResult] = []
 
-    # Fallback: text-only.
-    article = telebot.types.InlineQueryResultArticle(
-        id=f"level:{user_id}",
-        title=f"КАРТА LEVEL @{username}",
-        input_message_content=telebot.types.InputTextMessageContent(
-            msg,
-            parse_mode="HTML",
-            disable_web_page_preview=True,
-        ),
-        description="Профиль гостя (LEVEL)",
+    # Main tappable row (text-only on send).
+    results.append(
+        telebot.types.InlineQueryResultArticle(
+            id=f"level:{user_id}",
+            title=f"🪪 КАРТА LEVEL @{username}",
+            description="Нажми",
+            input_message_content=telebot.types.InputTextMessageContent(
+                msg,
+                parse_mode="HTML",
+                disable_web_page_preview=True,
+            ),
+        )
     )
-    bot.answer_inline_query(query.id, [article], cache_time=1, is_personal=True)
+
+    # Preview row with image in the inline list; still sends text-only card on tap.
+    photo_file_id = ensure_inline_photo_file_id()
+    if photo_file_id:
+        try:
+            results.append(
+                telebot.types.InlineQueryResultCachedPhoto(
+                    id=f"levelp:{user_id}",
+                    photo_file_id=photo_file_id,
+                    title=f"🪪 КАРТА LEVEL @{username}",
+                    description="Нажми",
+                    input_message_content=telebot.types.InputTextMessageContent(
+                        msg,
+                        parse_mode="HTML",
+                        disable_web_page_preview=True,
+                    ),
+                )
+            )
+        except Exception:
+            pass
+
+    bot.answer_inline_query(query.id, results, cache_time=1, is_personal=True)
+    return
 
 
 if __name__ == "__main__":
@@ -2840,6 +2853,12 @@ if __name__ == "__main__":
             except Exception as e:
                 # Commands are optional; polling can still work.
                 log.warning("setMyCommands failed: %s", e)
+
+            # Best-effort cache for inline image (so inline results can show a photo).
+            try:
+                ensure_inline_photo_file_id()
+            except Exception:
+                pass
 
             # Be explicit to ensure inline queries are delivered to the bot.
             log.info("Starting polling (skip_pending=%s)", True)
