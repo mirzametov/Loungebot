@@ -506,6 +506,24 @@ def send_interior(chat_id: int, *, idx: int) -> None:
         bot.send_photo(chat_id, f, reply_markup=interior_keyboard(idx))
 
 
+def pitbike_keyboard() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardMarkup()
+    kb.row(InlineKeyboardButton(text="📸 Интерьер", callback_data="location_interior"))
+    kb.row(InlineKeyboardButton(text="🏠 Домой", callback_data="back_to_main"))
+    return kb
+
+
+def send_pitbike_photo(chat_id: int) -> None:
+    # Photo #3 is the pitbike shot.
+    p = _interior_photo_path(3)
+    if not p.exists():
+        bot.send_message(chat_id, "Фото питбайка не найдено.")
+        return
+    with p.open("rb") as f:
+        # Deep-link should just drop the photo without additional menus.
+        bot.send_photo(chat_id, f)
+
+
 def menu_inline_keyboard(
     *,
     active: str | None = None,
@@ -1914,7 +1932,8 @@ def handle_start(message: telebot.types.Message) -> None:
     except Exception:
         payload = ""
     if payload == "pitbike":
-        send_interior(message.chat.id, idx=1)
+        # Deep-link: show the pitbike photo directly (no gallery UI).
+        send_pitbike_photo(message.chat.id)
         return
 
     send_main_menu(message.chat.id, user=message.from_user)
