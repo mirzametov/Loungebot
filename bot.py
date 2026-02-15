@@ -1817,7 +1817,7 @@ def level_rating_text(*, superadmin: bool) -> str:
         return f"{prefix} - <b>{escape(str(label))}</b>"
 
     lines: list[str] = []
-    lines.append("<b>🏆 РЕЙТИНГ ГОСТЕЙ</b>")
+    lines.append("<b>РЕЙТИНГ ГОСТЕЙ</b>")
     lines.append("")
     lines.append(f"Топ по визитам за <b>{escape(m_nom)}</b> в баре")
     if now < LAUNCH:
