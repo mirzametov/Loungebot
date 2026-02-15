@@ -2820,6 +2820,18 @@ def handle_menu_sections(call: telebot.types.CallbackQuery) -> None:
     if not _callback_guard(call):
         return
 
+    if call.data == "menu_hookah":
+        bot.send_message(
+            call.message.chat.id,
+            "До 17:00 - 1 000₽\n"
+            "После 17:00 - 1 400₽\n\n"
+            "Соберём вкус и крепость под тебя. Работаем на премиальных табаках.\n\n"
+            "Если за столом более четырёх гостей, необходимо заказать 2 кальяна единовременно, если более шести - 3 кальяна\n\n"
+            "С 19:00 действует правило - 2 часа на один кальян",
+            reply_markup=menu_inline_keyboard(),
+        )
+        return
+
     if call.data == "menu_food":
         bot.send_message(
             call.message.chat.id,
