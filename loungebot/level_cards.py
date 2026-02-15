@@ -90,7 +90,14 @@ def next_tier_info(visits: int) -> tuple[str, int] | None:
 
 def _recalc(rec: dict[str, Any]) -> None:
     if bool(rec.get("staff_gold", False)):
-        rec["level"] = "GOLD🥇"
+        # Staff cards are not part of standard tiers, and do not depend on visits.
+        # Keep a dedicated label so staff never appears as GOLD in tier stats/raffles.
+        staff_level = rec.get("staff_level")
+        if isinstance(staff_level, str) and staff_level.strip():
+            rec["level"] = staff_level.strip()
+        else:
+            # Backward-compat: older records only had staff_gold.
+            rec["level"] = "ADMIN🐧"
         rec["discount"] = 10
         return
     visits = int(rec.get("visits", 0) or 0)
@@ -178,6 +185,7 @@ def ensure_level_card(
         "discount": 3,
         "visits": 0,
         "staff_gold": False,
+        "staff_level": None,
     }
     _recalc(by_number[card_number])
     # Keep field for backward compatibility; not used for allocation anymore.
@@ -236,6 +244,7 @@ def add_visit_by_user_id(user_id: int, delta: int = 1) -> LevelCard | None:
 def set_staff_gold_by_user_id(
     user_id: int,
     *,
+    staff_level: str | None = None,
     username: str | None = None,
     first_name: str | None = None,
     last_name: str | None = None,
@@ -251,6 +260,8 @@ def set_staff_gold_by_user_id(
         # Shouldn't happen, but keep safe.
         return card
     rec["staff_gold"] = True
+    if staff_level:
+        rec["staff_level"] = str(staff_level)
     if username:
         rec["username"] = username
     if first_name:
@@ -273,6 +284,7 @@ def clear_staff_gold_by_user_id(user_id: int) -> LevelCard | None:
     if not isinstance(rec, dict):
         return None
     rec["staff_gold"] = False
+    rec.pop("staff_level", None)
     _recalc(rec)
     _save(data)
     return _to_card(str(num), rec)

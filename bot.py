@@ -572,7 +572,7 @@ def admin_rules_text(tab: str) -> str:
             "<b>Правила рейтинга</b>\n\n"
             "<b>Как считается</b>\n"
             "• рейтинг строится по количеству <b>визитов за месяц</b>\n"
-            "• админы по умолчанию получают карту <b>LEVEL GOLD</b>, но <b>не участвуют</b> в рейтингах и розыгрышах\n\n"
+            "• админы по умолчанию получают карту <b>ADMIN</b>/<b>SUPERADMIN</b> и <b>не участвуют</b> в рейтингах и розыгрышах\n\n"
             "<b>Бонус победителям</b>\n"
             "• топ-3 прошлого месяца получают дополнительную скидку на <b>следующий месяц</b>:\n"
             "  - 🥇 +10%\n"
@@ -610,9 +610,10 @@ def admin_rules_text(tab: str) -> str:
             "• визиты добавляет админ по номеру карты через кнопку <b>Добавить визит</b>\n"
             "• уровень и скидка пересчитываются автоматически по количеству визитов\n\n"
             "<b>Админы</b>\n"
-            "• у админов карта всегда <b>GOLD🥇 10%</b> (без визитов)\n"
+            "• у админов карта всегда <b>ADMIN🐧 10%</b> (без визитов)\n"
+            "• у супер-админов карта всегда <b>SUPERADMIN🥷 10%</b> (без визитов)\n"
             "• админы <b>не участвуют</b> в рейтингах и розыгрышах\n"
-            "• если админа разжаловать, GOLD убирается и уровень снова считается по визитам"
+            "• если админа разжаловать, staff-карта убирается и уровень снова считается по визитам"
         )
     # points (default)
     return (
@@ -1189,16 +1190,18 @@ def _callback_guard(call: telebot.types.CallbackQuery, window_s: float = 1.5) ->
                 call.from_user.first_name,
                 call.from_user.last_name,
             )
-            # Staff accounts always have GOLD card (no visits are added by this).
+            # Staff accounts always have a dedicated staff card (no visits are added by this).
             if _is_staff(call.from_user):
+                staff_level = _staff_level_label(user_id, call.from_user.username) or "ADMIN🐧"
                 set_staff_gold_by_user_id(
                     user_id,
+                    staff_level=staff_level,
                     username=call.from_user.username,
                     first_name=call.from_user.first_name,
                     last_name=call.from_user.last_name,
                 )
             else:
-                # If a user was previously staff and got demoted, drop staff GOLD and
+                # If a user was previously staff and got demoted, drop staff card and
                 # recalculate their LEVEL from visits.
                 clear_staff_gold_by_user_id(user_id)
         inc_click(user_id)
@@ -1245,16 +1248,18 @@ def _message_guard(message: telebot.types.Message, window_s: float = 2.0) -> boo
                 message.from_user.first_name,
                 message.from_user.last_name,
             )
-            # Staff accounts always have GOLD card (no visits are added by this).
+            # Staff accounts always have a dedicated staff card (no visits are added by this).
             if _is_staff(message.from_user):
+                staff_level = _staff_level_label(message.from_user.id, message.from_user.username) or "ADMIN🐧"
                 set_staff_gold_by_user_id(
                     message.from_user.id,
+                    staff_level=staff_level,
                     username=message.from_user.username,
                     first_name=message.from_user.first_name,
                     last_name=message.from_user.last_name,
                 )
             else:
-                # If a user was previously staff and got demoted, drop staff GOLD and
+                # If a user was previously staff and got demoted, drop staff card and
                 # recalculate their LEVEL from visits.
                 clear_staff_gold_by_user_id(message.from_user.id)
             inc_click(message.from_user.id)
@@ -2426,11 +2431,11 @@ def handle_admin_add_input(message: telebot.types.Message) -> None:
 
     add_admin_by_username(username)
     _pending_admin_add.discard(message.chat.id)
-    # If we already know this admin's user_id, force GOLD card right away.
+    # If we already know this admin's user_id, force staff card right away.
     try:
         uid = find_user_id_by_username(username)
         if uid is not None:
-            set_staff_gold_by_user_id(uid, username=username)
+            set_staff_gold_by_user_id(uid, staff_level="ADMIN🐧", username=username)
     except Exception:
         pass
     bot.send_message(message.chat.id, f"Готово. Добавил админа: <b>@{escape(username)}</b>")
