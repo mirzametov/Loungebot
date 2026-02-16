@@ -448,7 +448,11 @@ def level_keyboard(*, registered: bool, active: str) -> InlineKeyboardMarkup:
 
 def location_inline_keyboard() -> InlineKeyboardMarkup:
     keyboard = InlineKeyboardMarkup()
-    keyboard.row(InlineKeyboardButton(text="🗺️ Ссылка 2ГИС", url=LOCATION_2GIS_URL))
+    keyboard.row(
+        InlineKeyboardButton(text="2GIS", url=LOCATION_2GIS_URL),
+        InlineKeyboardButton(text="Яндекс", url=YANDEX_URL),
+        InlineKeyboardButton(text="Телеграм", callback_data="location_telegram_geo"),
+    )
     keyboard.row(InlineKeyboardButton(text="📸 Интерьер", callback_data="location_interior"))
     keyboard.row(InlineKeyboardButton(text="🚀 Новости бара", url=NEWS_URL))
     keyboard.row(InlineKeyboardButton(text="🏍 Наш прокат Прохват72", url=PROHVAT72_URL))
@@ -1043,10 +1047,13 @@ MENU_URL = os.getenv("MENU_URL", "https://example.com/menu")
 BOOKING_URL = os.getenv("BOOKING_URL", "https://example.com/booking")
 LOCATION_URL = os.getenv("LOCATION_URL", "https://maps.google.com")
 LOCATION_2GIS_URL = os.getenv("LOCATION_2GIS_URL", "https://2gis.ru/tyumen/geo/70000001110930565")
+YANDEX_URL = os.getenv("YANDEX_URL", "https://yandex.ru/navi/org/na_grani/224347539954?si=q3cpc1dt8vaxpdygdhftk8wjxc")
 NEWS_URL = os.getenv("NEWS_URL", "https://t.me/nagrani_lounge")
 PROHVAT72_URL = os.getenv("PROHVAT72_URL", "https://t.me/prohvat72")
 RACES_URL = os.getenv("RACES_URL", "https://t.me/na_grani_team")
 LOCATION_ADDRESS = os.getenv("LOCATION_ADDRESS", "Мы находимся по адресу:\nФармана Салманова, 15")
+LOCATION_LAT = float(os.getenv("LOCATION_LAT", "57.1583"))
+LOCATION_LON = float(os.getenv("LOCATION_LON", "65.5572"))
 BOOKING_ADMIN = os.getenv("BOOKING_ADMIN", "novopaha89")
 BOOKING_TEXT = os.getenv(
     "BOOKING_TEXT",
@@ -2965,6 +2972,25 @@ def handle_location_interior(call: telebot.types.CallbackQuery) -> None:
     if call.message is None:
         return
     send_interior(call.message.chat.id, idx=1)
+
+
+@bot.callback_query_handler(func=lambda call: call.data == "location_telegram_geo")
+def handle_location_telegram_geo(call: telebot.types.CallbackQuery) -> None:
+    if not _callback_guard(call):
+        return
+    if call.message is None:
+        return
+    try:
+        bot.send_location(call.message.chat.id, latitude=LOCATION_LAT, longitude=LOCATION_LON)
+        bot.send_venue(
+            call.message.chat.id,
+            latitude=LOCATION_LAT,
+            longitude=LOCATION_LON,
+            title="На Грани",
+            address="Фармана Салманова 15",
+        )
+    except Exception as e:
+        bot.send_message(call.message.chat.id, f"Не удалось отправить геолокацию: <code>{escape(str(e))}</code>")
 
 
 @bot.callback_query_handler(func=lambda call: (call.data or "").startswith("interior:"))
