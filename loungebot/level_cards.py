@@ -6,7 +6,7 @@ import random
 
 # Level rules (visits thresholds).
 TIERS: list[tuple[int, str, int]] = [
-    (0, "IRON⚙️", 3),
+    (1, "IRON⚙️", 3),
     (5, "BRONZE🥉", 5),
     (15, "SILVER🥈", 7),
     (35, "GOLD🥇", 10),
@@ -66,6 +66,8 @@ def _to_card(card_number: str, rec: dict[str, Any]) -> LevelCard:
 
 def tier_for_visits(visits: int) -> tuple[str, int]:
     v = int(visits or 0)
+    if v <= 0:
+        return ("-", 0)
     level = TIERS[0][1]
     discount = TIERS[0][2]
     for threshold, lvl, disc in TIERS:
