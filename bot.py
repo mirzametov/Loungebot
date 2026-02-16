@@ -325,7 +325,10 @@ def guest_card_text(display_name: str, *, user_id: int | None = None) -> str:
             f"Номер карты: <b>{escape(card_number)}</b>\n\n"
             f"Всего визитов: <b>{total_visits}</b>\n"
             f"Скидка: <b>{base_discount}%</b>\n"
-            "До <b>IRON⚙️</b> осталось: <b>1 визит</b>"
+            "До <b>IRON⚙️</b> осталось: <b>1 визит</b>\n\n"
+            "Твой уровень даёт:\n"
+            f"• скидка <b>{total_discount}%</b> на меню <b><a href=\"https://t.me/nagrani_lounge\">Lounge</a></b>\n"
+            f"• скидка <b>{total_discount}%</b> на <b><a href=\"https://t.me/prohvat72\">Прохват72</a></b>\n"
         )
 
     return (
