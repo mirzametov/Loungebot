@@ -1824,7 +1824,7 @@ def send_level_menu(chat_id: int, user: telebot.types.User | None, user_id: int 
 
     bot.send_message(
         chat_id,
-        "Карта <b>LEVEL</b> - это твой личный профиль гостя. Здесь растёт уровень скидки и не только…",
+        "Карта <b>LEVEL</b> - твой личный профиль гостя. <b>Скидки до 20%</b> и доступ к <b>закрытым розыгрышам</b>",
         reply_markup=guest_card_inline_keyboard(),
     )
 
@@ -1840,7 +1840,7 @@ def level_card_message_text(user: telebot.types.User | None, user_id: int | None
         )
         return guest_card_text(display_name, user_id=user_id)
     return (
-        "Карта <b>LEVEL</b> - это твой личный профиль гостя. Здесь растёт уровень скидки и не только…"
+        "Карта <b>LEVEL</b> - твой личный профиль гостя. <b>Скидки до 20%</b> и доступ к <b>закрытым розыгрышам</b>"
     )
 
 def level_visits_text() -> str:
