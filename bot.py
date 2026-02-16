@@ -270,6 +270,14 @@ def guest_card_text(display_name: str, *, user_id: int | None = None) -> str:
     if lvl_override:
         level_label = lvl_override
 
+    # New rule: registered users with 0 visits have no active level/discount yet.
+    inactive_zero = bool(card and total_visits <= 0 and not lvl_override)
+    if inactive_zero:
+        level_label = "-"
+        base_discount = 0
+        bonus_discount = 0
+        total_discount = 0
+
     if user_id is not None and is_superadmin(int(user_id)):
         header_line = f"Твой уровень: <b>{escape(level_label)}</b>"
     else:
@@ -279,6 +287,8 @@ def guest_card_text(display_name: str, *, user_id: int | None = None) -> str:
     progress_line = ""
     if lvl_override:
         progress_line = ""
+    elif inactive_zero:
+        progress_line = f"До <b>IRON⚙️</b> осталось: <b>1 {_visits_word(1)}</b>"
     elif card and not str(level_label).startswith("GOLD"):
         next_info = next_tier_info(total_visits)
         if next_info is not None:
@@ -307,17 +317,29 @@ def guest_card_text(display_name: str, *, user_id: int | None = None) -> str:
     if progress_line:
         mid_lines.append(progress_line)
 
+    if inactive_zero:
+        return (
+            "<b>КАРТА LEVEL</b>\n\n"
+            f"{header_line}\n"
+            "(нужен 1 визит для активации скидки)\n"
+            f"Номер карты: <b>{escape(card_number)}</b>\n\n"
+            f"Всего визитов: <b>{total_visits}</b>\n"
+            f"Скидка: <b>{base_discount}%</b>\n"
+            "До <b>IRON⚙️</b> осталось: <b>1 визит</b>"
+        )
+
     return (
         "<b>КАРТА LEVEL</b>\n\n"
         f"{header_line}\n"
-        f"Номер карты: <b>{escape(card_number)}</b>\n"
-        "\n"
+        + ("(нужен 1 визит для активации скидки)\n" if inactive_zero else "")
+        + f"Номер карты: <b>{escape(card_number)}</b>\n"
+        + "\n"
         + "\n".join(mid_lines)
         + (f"\n{medals_line}" if medals_line else "")
         + "\n\n"
-        "Твой уровень даёт:\n"
-        f"• скидка <b>{total_discount}%</b> на меню <b><a href=\"https://t.me/nagrani_lounge\">Lounge</a></b>\n"
-        f"• скидка <b>{total_discount}%</b> на <b><a href=\"https://t.me/prohvat72\">Прохват72</a></b>\n"
+        + "Твой уровень даёт:\n"
+        + f"• скидка <b>{total_discount}%</b> на меню <b><a href=\"https://t.me/nagrani_lounge\">Lounge</a></b>\n"
+        + f"• скидка <b>{total_discount}%</b> на <b><a href=\"https://t.me/prohvat72\">Прохват72</a></b>\n"
     )
 
 def is_superadmin(user_id: int | None) -> bool:
