@@ -1154,6 +1154,21 @@ def ensure_main_menu_photo_file_id() -> str | None:
         ):
             _main_menu_photo_file_id = str(cached["photo_file_id"])
             return _main_menu_photo_file_id
+
+        # Fallback: reuse inline cached photo id for the same file/version.
+        inline_cached = _load_inline_cache()
+        if (
+            isinstance(inline_cached, dict)
+            and inline_cached.get("path") == str(p)
+            and int(inline_cached.get("mtime") or 0) == mtime
+            and isinstance(inline_cached.get("photo_file_id"), str)
+            and inline_cached.get("photo_file_id")
+        ):
+            _main_menu_photo_file_id = str(inline_cached["photo_file_id"])
+            _save_main_menu_cache(
+                {"path": str(p), "mtime": mtime, "photo_file_id": _main_menu_photo_file_id}
+            )
+            return _main_menu_photo_file_id
     except Exception:
         pass
     return None
