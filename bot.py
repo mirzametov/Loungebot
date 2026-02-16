@@ -321,7 +321,7 @@ def guest_card_text(display_name: str, *, user_id: int | None = None) -> str:
         return (
             "<b>КАРТА LEVEL</b>\n\n"
             f"{header_line}\n"
-            "(нужен 1 визит для активации скидки)\n"
+            "(нужен <b>1 визит</b> для активации скидки)\n"
             f"Номер карты: <b>{escape(card_number)}</b>\n\n"
             f"Всего визитов: <b>{total_visits}</b>\n"
             f"Скидка: <b>{base_discount}%</b>\n"
