@@ -3308,7 +3308,7 @@ if __name__ == "__main__":
                 bot.set_my_commands(
                     [
                         BotCommand("start", "Главное меню"),
-                        BotCommand("level", "🪪 LEVEL"),
+                        BotCommand("level", "🪪 Карта LEVEL"),
                         BotCommand("menu", "🧉 Меню"),
                         BotCommand("booking", "🛋 Бронь"),
                         BotCommand("location", "🚕 Найти нас"),
