@@ -3326,7 +3326,7 @@ if __name__ == "__main__":
             try:
                 bot.set_my_commands(
                     [
-                        BotCommand("start", "Главное меню"),
+                        BotCommand("start", "ГЛАВНОЕ МЕНЮ"),
                         BotCommand("level", "🪪 Карта LEVEL"),
                         BotCommand("menu", "🧉 Меню"),
                         BotCommand("booking", "🛋 Бронь"),
