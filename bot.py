@@ -2982,13 +2982,6 @@ def handle_location_telegram_geo(call: telebot.types.CallbackQuery) -> None:
         return
     try:
         bot.send_location(call.message.chat.id, latitude=LOCATION_LAT, longitude=LOCATION_LON)
-        bot.send_venue(
-            call.message.chat.id,
-            latitude=LOCATION_LAT,
-            longitude=LOCATION_LON,
-            title="На Грани",
-            address="Фармана Салманова 15",
-        )
     except Exception as e:
         bot.send_message(call.message.chat.id, f"Не удалось отправить геолокацию: <code>{escape(str(e))}</code>")
 
