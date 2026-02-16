@@ -3381,74 +3381,97 @@ def handle_inline_query(query: telebot.types.InlineQuery) -> None:
     - "@YourBot https://t.me/username"
     Returns a LEVEL card message for that user (if we have them in stats db).
     """
-    qtext = (query.query or "").strip()
-    username = _extract_username_from_inline_query(qtext)
-    if not username:
-        # Show a hint so user sees that inline works.
-        article = telebot.types.InlineQueryResultArticle(
-            id="level:hint",
-            title="Как вызвать карту LEVEL",
-            input_message_content=telebot.types.InputTextMessageContent(
-                "Напиши: @nagraniloungetestbot @username\n"
-                "Пример: @nagraniloungetestbot @mirzametov13",
-                parse_mode=None,
-                disable_web_page_preview=True,
-            ),
-            description="Напиши @username после имени бота",
+    try:
+        qtext = (query.query or "").strip()
+        log.info(
+            "inline query from user_id=%s q=%r",
+            getattr(query.from_user, "id", None),
+            qtext[:120],
         )
-        bot.answer_inline_query(query.id, [article], cache_time=1, is_personal=True)
+        username = _extract_username_from_inline_query(qtext)
+        if not username:
+            # Show a hint so user sees that inline works.
+            article = telebot.types.InlineQueryResultArticle(
+                id="level_hint",
+                title="Как вызвать карту LEVEL",
+                input_message_content=telebot.types.InputTextMessageContent(
+                    "Напиши: @nagraniloungetestbot @username\n"
+                    "Пример: @nagraniloungetestbot @mirzametov13",
+                    parse_mode=None,
+                    disable_web_page_preview=True,
+                ),
+                description="Напиши @username после имени бота",
+            )
+            bot.answer_inline_query(query.id, [article], cache_time=1, is_personal=True)
+            return
+
+        user_id = find_user_id_by_username(username)
+        if user_id is None:
+            article = telebot.types.InlineQueryResultArticle(
+                id=f"level_notfound_{username}",
+                title=f"Нет данных для @{username}",
+                input_message_content=telebot.types.InputTextMessageContent(
+                    "Пользователь ещё не открывал бота. Пусть нажмёт /start.",
+                    parse_mode=None,
+                    disable_web_page_preview=True,
+                ),
+                description="Пользователь не найден в базе бота",
+            )
+            bot.answer_inline_query(query.id, [article], cache_time=1, is_personal=True)
+            return
+
+        # Only show card if it's registered.
+        if find_card_by_user_id(user_id) is None:
+            article = telebot.types.InlineQueryResultArticle(
+                id=f"level_nocard_{user_id}",
+                title=f"Карта LEVEL не зарегистрирована (@{username})",
+                input_message_content=telebot.types.InputTextMessageContent(
+                    "Карта LEVEL ещё не зарегистрирована.",
+                    parse_mode=None,
+                    disable_web_page_preview=True,
+                ),
+                description="Нет зарегистрированной карты LEVEL",
+            )
+            bot.answer_inline_query(query.id, [article], cache_time=1, is_personal=True)
+            return
+
+        msg = level_card_inline_text(username=username, user_id=user_id)
+        results: list[telebot.types.InlineQueryResult] = []
+
+        # Main tappable row (text-only on send).
+        results.append(
+            telebot.types.InlineQueryResultArticle(
+                id=f"level_{user_id}",
+                title=f"🪪 КАРТА LEVEL @{username}",
+                description="Нажми",
+                input_message_content=telebot.types.InputTextMessageContent(
+                    msg,
+                    parse_mode="HTML",
+                    disable_web_page_preview=True,
+                ),
+            )
+        )
+
+        bot.answer_inline_query(query.id, results, cache_time=1, is_personal=True)
         return
-
-    user_id = find_user_id_by_username(username)
-    if user_id is None:
-        article = telebot.types.InlineQueryResultArticle(
-            id=f"level:notfound:{username}",
-            title=f"Нет данных для @{username}",
-            input_message_content=telebot.types.InputTextMessageContent(
-                "Пользователь ещё не открывал бота. Пусть нажмёт /start.",
-                parse_mode=None,
-                disable_web_page_preview=True,
-            ),
-            description="Пользователь не найден в базе бота",
-        )
-        bot.answer_inline_query(query.id, [article], cache_time=1, is_personal=True)
+    except Exception as e:
+        log.exception("inline handler failed: %s", e)
+        # Best-effort: don't leave user with endless spinner.
+        try:
+            article = telebot.types.InlineQueryResultArticle(
+                id="level_error",
+                title="Ошибка inline-режима",
+                input_message_content=telebot.types.InputTextMessageContent(
+                    "Не удалось сформировать карточку. Попробуй ещё раз.",
+                    parse_mode=None,
+                    disable_web_page_preview=True,
+                ),
+                description="Попробуй повторить запрос",
+            )
+            bot.answer_inline_query(query.id, [article], cache_time=1, is_personal=True)
+        except Exception:
+            pass
         return
-
-    # Only show card if it's registered.
-    if find_card_by_user_id(user_id) is None:
-        article = telebot.types.InlineQueryResultArticle(
-            id=f"level:nocard:{user_id}",
-            title=f"Карта LEVEL не зарегистрирована (@{username})",
-            input_message_content=telebot.types.InputTextMessageContent(
-                "Карта LEVEL ещё не зарегистрирована.",
-                parse_mode=None,
-                disable_web_page_preview=True,
-            ),
-            description="Нет зарегистрированной карты LEVEL",
-        )
-        bot.answer_inline_query(query.id, [article], cache_time=1, is_personal=True)
-        return
-
-    msg = level_card_inline_text(username=username, user_id=user_id)
-
-    results: list[telebot.types.InlineQueryResult] = []
-
-    # Main tappable row (text-only on send).
-    results.append(
-        telebot.types.InlineQueryResultArticle(
-            id=f"level:{user_id}",
-            title=f"🪪 КАРТА LEVEL @{username}",
-            description="Нажми",
-            input_message_content=telebot.types.InputTextMessageContent(
-                msg,
-                parse_mode="HTML",
-                disable_web_page_preview=True,
-            ),
-        )
-    )
-
-    bot.answer_inline_query(query.id, results, cache_time=1, is_personal=True)
-    return
 
 
 if __name__ == "__main__":
