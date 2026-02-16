@@ -2201,7 +2201,7 @@ def handle_admin_stats(call: telebot.types.CallbackQuery) -> None:
             c_silver += 1
         elif str(lvl).startswith("BRONZE"):
             c_bronze += 1
-        else:
+        elif str(lvl).startswith("IRON"):
             c_iron += 1
 
     lines.append("")
