@@ -1104,6 +1104,61 @@ def _save_inline_cache(d: dict) -> None:
         pass
 
 
+def _main_menu_cache_file() -> Path:
+    return Path("data") / "main_menu_cache.json"
+
+
+def _load_main_menu_cache() -> dict:
+    try:
+        return json.loads(_main_menu_cache_file().read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _save_main_menu_cache(d: dict) -> None:
+    try:
+        Path("data").mkdir(parents=True, exist_ok=True)
+        _main_menu_cache_file().write_text(json.dumps(d, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _clear_main_menu_cache() -> None:
+    try:
+        _main_menu_cache_file().unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
+def ensure_main_menu_photo_file_id() -> str | None:
+    """
+    Keep the main menu photo file_id across restarts to avoid re-uploading
+    the same image and polluting Telegram bot media storage.
+    """
+    global _main_menu_photo_file_id
+    if _main_menu_photo_file_id:
+        return _main_menu_photo_file_id
+
+    try:
+        p = Path(WELCOME_IMAGE_PATH)
+        if not p.exists():
+            return None
+        mtime = int(p.stat().st_mtime)
+        cached = _load_main_menu_cache()
+        if (
+            isinstance(cached, dict)
+            and cached.get("path") == str(p)
+            and int(cached.get("mtime") or 0) == mtime
+            and isinstance(cached.get("photo_file_id"), str)
+            and cached.get("photo_file_id")
+        ):
+            _main_menu_photo_file_id = str(cached["photo_file_id"])
+            return _main_menu_photo_file_id
+    except Exception:
+        pass
+    return None
+
+
 def ensure_inline_photo_file_id() -> str | None:
     """
     Inline results can only show images by URL or cached file_id.
@@ -1621,6 +1676,7 @@ def send_main_menu(chat_id: int, *, user: telebot.types.User | None) -> None:
 
     if image_path.exists():
         global _main_menu_photo_file_id
+        ensure_main_menu_photo_file_id()
         try:
             # Fast path: reuse cached file_id so Telegram doesn't re-upload the image.
             if _main_menu_photo_file_id:
@@ -1628,12 +1684,20 @@ def send_main_menu(chat_id: int, *, user: telebot.types.User | None) -> None:
                 return
         except Exception:
             _main_menu_photo_file_id = None
+            _clear_main_menu_cache()
 
         with image_path.open("rb") as image:
             msg = bot.send_photo(chat_id, image, reply_markup=keyboard)
         try:
             if msg.photo:
                 _main_menu_photo_file_id = msg.photo[-1].file_id
+                _save_main_menu_cache(
+                    {
+                        "path": str(image_path),
+                        "mtime": int(image_path.stat().st_mtime),
+                        "photo_file_id": _main_menu_photo_file_id,
+                    }
+                )
         except Exception:
             pass
     else:
