@@ -245,6 +245,19 @@ def total_discount_for_user(user_id: int | None, base_discount: int) -> tuple[in
     return (total, bonus)
 
 
+def _visits_word(n: int) -> str:
+    v = abs(int(n))
+    mod100 = v % 100
+    mod10 = v % 10
+    if 11 <= mod100 <= 14:
+        return "визитов"
+    if mod10 == 1:
+        return "визит"
+    if 2 <= mod10 <= 4:
+        return "визита"
+    return "визитов"
+
+
 def guest_card_text(display_name: str, *, user_id: int | None = None) -> str:
     card = find_card_by_user_id(int(user_id)) if user_id is not None else None
     level_label = card.level if card else "IRON⚙️"
@@ -270,10 +283,10 @@ def guest_card_text(display_name: str, *, user_id: int | None = None) -> str:
         next_info = next_tier_info(total_visits)
         if next_info is not None:
             next_level, remain = next_info
-            progress_line = f"До <b>{escape(next_level)}</b> осталось: <b>{remain} визитов</b>"
+            progress_line = f"До <b>{escape(next_level)}</b> осталось: <b>{remain} {_visits_word(remain)}</b>"
     elif card is None:
         # Unregistered fallback copy.
-        progress_line = "До <b>BRONZE🥉</b> осталось: <b>5 визитов</b>"
+        progress_line = f"До <b>BRONZE🥉</b> осталось: <b>5 {_visits_word(5)}</b>"
 
     if bonus_discount > 0:
         discount_line = (
