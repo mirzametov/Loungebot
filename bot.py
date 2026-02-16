@@ -1066,6 +1066,8 @@ BOOKING_TEXT = os.getenv(
 # Support escaped newlines from .env values like "\\n".
 BOOKING_TEXT = BOOKING_TEXT.replace("\\n", "\n")
 LOCATION_ADDRESS = LOCATION_ADDRESS.replace("\\n", "\n")
+if LOCATION_ADDRESS.strip() == "Мы находимся по адресу:":
+    LOCATION_ADDRESS = "Мы находимся по адресу:\n<b>Фармана Салманова 15</b>"
 
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN is not set in .env")
