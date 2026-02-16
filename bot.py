@@ -3500,7 +3500,8 @@ if __name__ == "__main__":
 
             # Be explicit to ensure inline queries are delivered to the bot.
             log.info("Starting polling (skip_pending=%s)", True)
-            bot.infinity_polling(skip_pending=True, allowed_updates=telebot.util.update_types)
+            # Do not restrict allowed_updates: inline mode needs inline_query updates.
+            bot.infinity_polling(skip_pending=True)
         except KeyboardInterrupt:
             raise
         except Exception as e:
