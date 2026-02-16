@@ -1052,8 +1052,8 @@ NEWS_URL = os.getenv("NEWS_URL", "https://t.me/nagrani_lounge")
 PROHVAT72_URL = os.getenv("PROHVAT72_URL", "https://t.me/prohvat72")
 RACES_URL = os.getenv("RACES_URL", "https://t.me/na_grani_team")
 LOCATION_ADDRESS = os.getenv("LOCATION_ADDRESS", "Мы находимся по адресу:\nФармана Салманова, 15")
-LOCATION_LAT = float(os.getenv("LOCATION_LAT", "57.1583"))
-LOCATION_LON = float(os.getenv("LOCATION_LON", "65.5572"))
+LOCATION_LAT = float(os.getenv("LOCATION_LAT", "57.1214949"))
+LOCATION_LON = float(os.getenv("LOCATION_LON", "65.4984533"))
 BOOKING_ADMIN = os.getenv("BOOKING_ADMIN", "novopaha89")
 BOOKING_TEXT = os.getenv(
     "BOOKING_TEXT",
