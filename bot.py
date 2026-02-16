@@ -1252,6 +1252,7 @@ def _build_info_text() -> str:
 # Best-effort guards against duplicate UI actions.
 _recent_callback_keys: dict[tuple[int, str, int], float] = {}
 _main_menu_photo_file_id: str | None = None
+_main_menu_message_id_by_chat: dict[int, int] = {}
 _recent_message_keys: dict[tuple[int, int], float] = {}
 _pending_admin_add: set[int] = set()
 _pending_visit_add: dict[int, str] = {}  # chat_id -> back_cb
@@ -1691,11 +1692,19 @@ def send_main_menu(chat_id: int, *, user: telebot.types.User | None) -> None:
 
     if image_path.exists():
         global _main_menu_photo_file_id
+        # Keep chat cleaner: remove previously sent main-menu photo before posting a new one.
+        prev_mid = _main_menu_message_id_by_chat.get(chat_id)
+        if prev_mid:
+            try:
+                bot.delete_message(chat_id, prev_mid)
+            except Exception:
+                pass
         ensure_main_menu_photo_file_id()
         try:
             # Fast path: reuse cached file_id so Telegram doesn't re-upload the image.
             if _main_menu_photo_file_id:
-                bot.send_photo(chat_id, _main_menu_photo_file_id, reply_markup=keyboard)
+                msg = bot.send_photo(chat_id, _main_menu_photo_file_id, reply_markup=keyboard)
+                _main_menu_message_id_by_chat[chat_id] = msg.message_id
                 return
         except Exception:
             _main_menu_photo_file_id = None
@@ -1703,6 +1712,7 @@ def send_main_menu(chat_id: int, *, user: telebot.types.User | None) -> None:
 
         with image_path.open("rb") as image:
             msg = bot.send_photo(chat_id, image, reply_markup=keyboard)
+        _main_menu_message_id_by_chat[chat_id] = msg.message_id
         try:
             if msg.photo:
                 _main_menu_photo_file_id = msg.photo[-1].file_id
