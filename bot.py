@@ -2253,9 +2253,6 @@ def _admin_stats_keyboard(*, mode: str, page: int, has_prev: bool, has_next: boo
                 return InlineKeyboardButton(text=text, callback_data=f"admin_stats_view:{m}:0")
         return InlineKeyboardButton(text=text, callback_data=f"admin_stats_view:{m}:0")
 
-    kb.row(_tab("🕒 Последние", "latest"), _tab("🏆 Визиты", "top_visits"))
-    kb.row(_tab("👆 Клики", "top_clicks"), _tab("🛡 Админы", "admins_visits"))
-
     nav: list[InlineKeyboardButton] = []
     if has_prev:
         nav.append(InlineKeyboardButton(text="◀", callback_data=f"admin_stats_view:{mode}:{max(page-1,0)}"))
@@ -2263,6 +2260,10 @@ def _admin_stats_keyboard(*, mode: str, page: int, has_prev: bool, has_next: boo
         nav.append(InlineKeyboardButton(text="▶", callback_data=f"admin_stats_view:{mode}:{page+1}"))
     if nav:
         kb.row(*nav)
+
+    # Order: visits, subscribers, clicks, admins.
+    kb.row(_tab("🏆 Визиты", "top_visits"), _tab("🕒 Подписчики", "latest"))
+    kb.row(_tab("👆 Клики", "top_clicks"), _tab("🛡 Админы", "admins_visits"))
 
     kb.row(
         InlineKeyboardButton(text="👈Назад", callback_data="admin_menu"),
