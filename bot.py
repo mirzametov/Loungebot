@@ -2312,8 +2312,8 @@ def _admin_stats_keyboard(*, mode: str, page: int, has_prev: bool, has_next: boo
     # 3) Список визитов | Подписчики
     # 4) Топ кнопок | Админы
     kb.row(_tab("🏆 Визиты", "top_visits"), _tab("👆 Клики", "top_clicks"))
-    kb.row(_tab("🧾 Список визитов", "visits_list"), _tab("🕒 Подписчики", "latest"))
-    kb.row(_tab("🔥 Топ экранов", "top_actions"), _tab("🛡 Админы", "admins_visits"))
+    kb.row(_tab("🧾 Список визитов", "visits_list"), _tab("💰 Подписчики", "latest"))
+    kb.row(_tab("🔥 Топ экранов", "top_actions"), _tab("🐧 Админы", "admins_visits"))
 
     kb.row(
         InlineKeyboardButton(text="👈Назад", callback_data="admin_menu"),
