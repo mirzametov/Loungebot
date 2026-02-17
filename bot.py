@@ -1512,9 +1512,10 @@ def _callback_guard(call: telebot.types.CallbackQuery, window_s: float = 1.5) ->
                 # recalculate their LEVEL from visits.
                 clear_staff_gold_by_user_id(user_id)
         inc_click(user_id)
-        # Global UI action counter (used for "Топ кнопок").
+        # Global UI action counter (used for "Топ экранов"), only for non-staff users.
         try:
-            inc_action(call.data or "")
+            if call.from_user and not _is_staff(call.from_user):
+                inc_action(call.data or "")
         except Exception:
             pass
     except Exception:
@@ -2312,7 +2313,7 @@ def _admin_stats_keyboard(*, mode: str, page: int, has_prev: bool, has_next: boo
     # 4) Топ кнопок | Админы
     kb.row(_tab("🏆 Визиты", "top_visits"), _tab("👆 Клики", "top_clicks"))
     kb.row(_tab("🧾 Список визитов", "visits_list"), _tab("🕒 Подписчики", "latest"))
-    kb.row(_tab("🔥 Топ кнопок", "top_actions"), _tab("🛡 Админы", "admins_visits"))
+    kb.row(_tab("🔥 Топ экранов", "top_actions"), _tab("🛡 Админы", "admins_visits"))
 
     kb.row(
         InlineKeyboardButton(text="👈Назад", callback_data="admin_menu"),
@@ -2537,7 +2538,7 @@ def _admin_stats_section_lines(*, mode: str, page: int) -> tuple[list[str], bool
     if mode == "top_actions":
         rows, total = top_actions_paged(offset=offset, limit=per_page)
         has_next = (offset + per_page) < total
-        lines.append("<b>Топ кнопок</b>")
+        lines.append("<b>Топ экранов</b>")
         if not rows:
             lines.append("Нет данных.")
             return (lines, has_prev, has_next)
@@ -2545,10 +2546,20 @@ def _admin_stats_section_lines(*, mode: str, page: int) -> tuple[list[str], bool
         # Friendly labels for common actions.
         label_map = {
             "back_to_main": "Домой",
-            "main_level": "Карта LEVEL",
+            "main_guest_card": "Карта LEVEL",
             "main_menu": "Меню",
             "main_booking": "Бронь",
             "main_location": "Найти нас",
+            "location_interior": "Интерьер",
+            "level_rules": "Условия",
+            "level_giveaway": "Розыгрыш",
+            "level_rating": "Рейтинг гостей",
+            "register_card": "Получить карту",
+            "menu_hookah": "Меню: Кальян",
+            "menu_tea": "Меню: Чай",
+            "menu_drinks": "Меню: Напитки",
+            "menu_food": "Меню: Еда",
+            "menu_rules": "Меню: Алкоголь",
             "main_admin": "суперадмин",
             "admin_stats": "Статистика",
         }
@@ -2559,6 +2570,9 @@ def _admin_stats_section_lines(*, mode: str, page: int) -> tuple[list[str], bool
             # Normalize: drop parameters after ":" for aggregation display.
             base = action.split(":", 1)[0]
             human = label_map.get(base, base)
+            # Hide internal/admin-only actions in this view.
+            if human.startswith("admin_") or base.startswith("admin_"):
+                continue
             prefix = _rank_prefix(i)
             lines.append(f"{prefix}<b>{escape(human)}</b> - <b>{cnt}</b>")
         return (lines, has_prev, has_next)
