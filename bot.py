@@ -33,8 +33,12 @@ from loungebot.admin_stats import (
     get_user_stats,
     has_click_in_last_days,
     inc_click,
+    recent_subscribers,
     subscribed_counts,
     top_by_clicks,
+    top_by_clicks_paged,
+    top_by_visits_paged,
+    top_admins_by_marked_visits_all_time,
     top_admins_by_marked_visits,
     touch_user,
     unsubscribed_counts,
@@ -433,6 +437,11 @@ def _rank_prefix(i: int) -> str:
     if i == 3:
         return "🥉"
     return f"{i}. "
+
+
+def _fmt_date_ymd(d: datetime) -> str:
+    # dd.mm.yyyy
+    return f"{d.day:02d}.{d.month:02d}.{d.year:04d}"
 
 def _is_admin(user: telebot.types.User | None) -> bool:
     if user is None:
@@ -2227,10 +2236,44 @@ def handle_admin_stats(call: telebot.types.CallbackQuery) -> None:
     if not is_superadmin(call.from_user.id if call.from_user else None):
         return
 
+    _pending_admin_add.discard(call.message.chat.id)
+    _pending_visit_add.pop(call.message.chat.id, None)
+    _send_or_edit_admin_stats(call, mode="latest", page=0)
+
+
+def _admin_stats_keyboard(*, mode: str, page: int, has_prev: bool, has_next: bool) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardMarkup()
+
+    def _tab(text: str, m: str) -> InlineKeyboardButton:
+        # Use Bot API 9.4+ button styles if supported by the library.
+        if m == mode:
+            try:
+                return InlineKeyboardButton(text=text, callback_data=f"admin_stats_view:{m}:0", style="primary")
+            except Exception:
+                return InlineKeyboardButton(text=text, callback_data=f"admin_stats_view:{m}:0")
+        return InlineKeyboardButton(text=text, callback_data=f"admin_stats_view:{m}:0")
+
+    kb.row(_tab("🕒 Последние", "latest"), _tab("🏆 Визиты", "top_visits"))
+    kb.row(_tab("👆 Клики", "top_clicks"), _tab("🛡 Админы", "admins_visits"))
+
+    nav: list[InlineKeyboardButton] = []
+    if has_prev:
+        nav.append(InlineKeyboardButton(text="◀", callback_data=f"admin_stats_view:{mode}:{max(page-1,0)}"))
+    if has_next:
+        nav.append(InlineKeyboardButton(text="▶", callback_data=f"admin_stats_view:{mode}:{page+1}"))
+    if nav:
+        kb.row(*nav)
+
+    kb.row(
+        InlineKeyboardButton(text="👈Назад", callback_data="admin_menu"),
+        InlineKeyboardButton(text="🏠 Домой", callback_data="back_to_main"),
+    )
+    return kb
+
+
+def _admin_stats_base_lines() -> list[str]:
     visits_today, visits_7, visits_30 = visit_counts(source=BOT_SOURCE)
     subs_today, subs_7, subs_30 = subscribed_counts()
-    # Keep unsubscribed_counts() imported for later, but we don't show it in UI now.
-    top = top_by_clicks(10)
 
     lines: list[str] = []
     lines.append("📊 <b>Статистика</b>")
@@ -2274,9 +2317,127 @@ def handle_admin_stats(call: telebot.types.CallbackQuery) -> None:
     lines.append(f"<b>🥈 SILVER: {c_silver}</b>")
     lines.append(f"<b>🥇 GOLD: {c_gold}</b>")
     lines.append("")
-    lines.append("<b>Топ подписчиков по кликам (ТОП-10)</b>")
+    return lines
 
-    for i, row in enumerate(top, start=1):
+
+def _admin_stats_section_lines(*, mode: str, page: int) -> tuple[list[str], bool, bool]:
+    per_page = 10
+    offset = max(int(page or 0), 0) * per_page
+
+    lines: list[str] = []
+    has_prev = offset > 0
+    has_next = False
+
+    if mode == "latest":
+        rows, total = recent_subscribers(offset=offset, limit=per_page, active_only=True)
+        has_next = (offset + per_page) < total
+        lines.append("<b>Последние подписчики</b>")
+        if not rows:
+            lines.append("Нет данных.")
+            return (lines, has_prev, has_next)
+
+        # Display oldest -> newest within the page so the last subscriber is at the bottom.
+        tz = _tyumen_now().tzinfo
+        buf = list(reversed(rows))
+        current_date = None
+        for row in buf:
+            uid = int(row["user_id"])
+            username = row.get("username")
+            if isinstance(username, str):
+                username = username.strip().lstrip("@") or None
+            else:
+                username = None
+            name = (
+                (row.get("first_name") or "")
+                or (row.get("last_name") or "")
+                or (username or "")
+                or str(uid)
+            )
+            name = escape(str(name))
+
+            raw = row.get("joined_at")
+            dt = None
+            try:
+                dt = datetime.fromisoformat(str(raw)) if raw else None
+            except Exception:
+                dt = None
+            if dt is not None:
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=datetime.now().astimezone().tzinfo)
+                dt = dt.astimezone(tz)
+                dkey = _fmt_date_ymd(dt)
+            else:
+                dkey = "Дата неизвестна"
+            if dkey != current_date:
+                current_date = dkey
+                lines.append("")
+                lines.append(f"<b>{escape(dkey)}</b>")
+            lines.append(f'<a href="{_tg_user_link(uid, username)}"><b>{name}</b></a>')
+        return (lines, has_prev, has_next)
+
+    if mode == "top_visits":
+        rows, total = top_by_visits_paged(offset=offset, limit=per_page, active_only=True)
+        has_next = (offset + per_page) < total
+        lines.append("<b>Топ подписчиков по визитам</b>")
+        if not rows:
+            lines.append("Нет данных.")
+            return (lines, has_prev, has_next)
+        for i, row in enumerate(rows, start=offset + 1):
+            uid = int(row["user_id"])
+            username = row.get("username")
+            if isinstance(username, str):
+                username = username.strip().lstrip("@") or None
+            else:
+                username = None
+            name = row.get("first_name") or row.get("username") or str(uid)
+            name = escape(str(name))
+            visits = int(row.get("visits", 0) or 0)
+            prefix = _rank_prefix(i)
+            lines.append(f'{prefix}<a href="{_tg_user_link(uid, username)}"><b>{name}</b></a> - визитов <b>{visits}</b>')
+        return (lines, has_prev, has_next)
+
+    if mode == "admins_visits":
+        # All-time marked visits, paged in bot (list is small).
+        all_rows = top_admins_by_marked_visits_all_time(source=BOT_SOURCE, limit=1000000)
+        total = len(all_rows)
+        rows = all_rows[offset : offset + per_page]
+        has_next = (offset + per_page) < total
+        lines.append("<b>Топ админов по визитам</b>")
+        if not rows:
+            lines.append("Нет данных.")
+            return (lines, has_prev, has_next)
+
+        admin_meta = {}
+        for rec in list_admins():
+            if rec.user_id is None:
+                continue
+            admin_meta[int(rec.user_id)] = (rec.username, rec.first_name, rec.last_name)
+
+        for i, row in enumerate(rows, start=offset + 1):
+            aid = int(row["admin_id"])
+            v = int(row["visits"])
+            meta = admin_meta.get(aid)
+            if meta:
+                u, first, last = meta
+            else:
+                stats = get_user_stats(aid) or {}
+                u = stats.get("username")
+                first = stats.get("first_name")
+                last = None
+            u = (u or "").strip().lstrip("@") or None
+            label = f"@{u}" if u else "Без ника"
+            prefix = _rank_prefix(i)
+            lines.append(f'{prefix}<a href="{_tg_user_link(aid, u)}"><b>{escape(label)}</b></a> - визитов <b>{v}</b>')
+        return (lines, has_prev, has_next)
+
+    # top_clicks (default)
+    rows, total = top_by_clicks_paged(offset=offset, limit=per_page, active_only=True)
+    has_next = (offset + per_page) < total
+    lines.append("<b>Топ подписчиков по кликам</b>")
+    if not rows:
+        lines.append("Нет данных.")
+        return (lines, has_prev, has_next)
+    for i, row in enumerate(rows, start=offset + 1):
         uid = int(row["user_id"])
         name = row.get("first_name") or row.get("username") or str(uid)
         name = escape(str(name))
@@ -2291,46 +2452,46 @@ def handle_admin_stats(call: telebot.types.CallbackQuery) -> None:
         lines.append(
             f'{prefix}<a href="{_tg_user_link(uid, username)}"><b>{name}</b></a> - кликов <b>{clicks}</b>, визитов <b>{visits}</b>'
         )
+    return (lines, has_prev, has_next)
 
-    lines.append("")
-    lines.append("<b>Топ админов по визитам</b>")
-    admin_rows = top_admins_by_marked_visits(source=BOT_SOURCE, days=30, limit=100)
-    if not admin_rows:
-        lines.append("Нет данных.")
-    else:
-        # Map admin_id -> (username, first, last) from our admin list (if known).
-        admin_meta = {}
-        for rec in list_admins():
-            if rec.user_id is None:
-                continue
-            admin_meta[int(rec.user_id)] = (rec.username, rec.first_name, rec.last_name)
 
-        for i, row in enumerate(admin_rows, start=1):
-            aid = int(row["admin_id"])
-            v = int(row["visits"])
-            meta = admin_meta.get(aid)
-            if meta:
-                u, first, last = meta
-            else:
-                stats = get_user_stats(aid) or {}
-                u = stats.get("username")
-                first = stats.get("first_name")
-                last = None
+def _send_or_edit_admin_stats(call: telebot.types.CallbackQuery, *, mode: str, page: int) -> None:
+    base = _admin_stats_base_lines()
+    section, has_prev, has_next = _admin_stats_section_lines(mode=mode, page=page)
+    text = "\n".join(base + section)
+    kb = _admin_stats_keyboard(mode=mode, page=page, has_prev=has_prev, has_next=has_next)
+    try:
+        if call.message is not None:
+            bot.edit_message_text(
+                text,
+                call.message.chat.id,
+                call.message.message_id,
+                reply_markup=kb,
+                disable_web_page_preview=True,
+            )
+            return
+    except Exception:
+        # Message might be not editable or unchanged; fall back to send.
+        pass
+    bot.send_message(call.message.chat.id if call.message else call.from_user.id, text, reply_markup=kb, disable_web_page_preview=True)
 
-            u = (u or "").strip().lstrip("@") or None
-            if u:
-                label = f"@{u}"
-            else:
-                label = "Без ника"
-            prefix = _rank_prefix(i)
-            lines.append(f'{prefix}<a href="{_tg_user_link(aid, u)}"><b>{escape(label)}</b></a> - визитов <b>{v}</b>')
 
-    bot.send_message(
-        call.message.chat.id,
-        "\n".join(lines),
-        reply_markup=admin_bottom_keyboard("admin_menu"),
-        disable_web_page_preview=True,
-    )
+@bot.callback_query_handler(func=lambda call: (call.data or "").startswith("admin_stats_view:"))
+def handle_admin_stats_view(call: telebot.types.CallbackQuery) -> None:
+    if not _callback_guard(call):
+        return
+    if call.message is None:
+        return
+    if not is_superadmin(call.from_user.id if call.from_user else None):
+        return
+    parts = (call.data or "").split(":")
+    # admin_stats_view:<mode>:<page>
+    mode = (parts[1] if len(parts) > 1 else "latest").strip() or "latest"
+    try:
+        page = int(parts[2]) if len(parts) > 2 else 0
+    except Exception:
+        page = 0
+    _send_or_edit_admin_stats(call, mode=mode, page=max(page, 0))
 
 
 @bot.callback_query_handler(func=lambda call: call.data == "admin_broadcast")

@@ -980,6 +980,117 @@ def top_by_clicks(limit: int = 50) -> list[dict[str, Any]]:
     return rows[:limit]
 
 
+def top_by_clicks_paged(*, offset: int = 0, limit: int = 10, active_only: bool = True) -> tuple[list[dict[str, Any]], int]:
+    rows = top_by_clicks(limit=1000000)
+    if active_only:
+        rows = [r for r in rows if r.get("active")]
+    total = len(rows)
+    o = max(int(offset or 0), 0)
+    l = max(int(limit or 0), 0)
+    return (rows[o : o + l], total)
+
+
+def recent_subscribers(*, offset: int = 0, limit: int = 10, active_only: bool = True) -> tuple[list[dict[str, Any]], int]:
+    """
+    Most recent subscribers by joined_at (desc). Rows include joined_at and user meta.
+    """
+    data = _load()
+    users: dict[str, Any] = data.get("users", {})
+    rows: list[dict[str, Any]] = []
+    for uid, rec in users.items():
+        if not isinstance(rec, dict):
+            continue
+        if active_only and rec.get("unsubscribed_at"):
+            continue
+        rows.append(
+            {
+                "user_id": int(uid),
+                "first_name": rec.get("first_name"),
+                "last_name": rec.get("last_name"),
+                "username": rec.get("username"),
+                "joined_at": rec.get("joined_at"),
+            }
+        )
+
+    def _key(r: dict[str, Any]) -> tuple[str, int]:
+        return (str(r.get("joined_at") or ""), int(r.get("user_id") or 0))
+
+    rows.sort(key=_key, reverse=True)
+    total = len(rows)
+    o = max(int(offset or 0), 0)
+    l = max(int(limit or 0), 0)
+    return (rows[o : o + l], total)
+
+
+def top_by_visits_paged(*, offset: int = 0, limit: int = 10, active_only: bool = True) -> tuple[list[dict[str, Any]], int]:
+    """
+    Top users by total confirmed visits (all time), desc.
+    """
+    data = _load()
+    users: dict[str, Any] = data.get("users", {})
+    rows: list[dict[str, Any]] = []
+    for uid, rec in users.items():
+        if not isinstance(rec, dict):
+            continue
+        if active_only and rec.get("unsubscribed_at"):
+            continue
+        events = rec.get("visit_events") or []
+        if not isinstance(events, list):
+            events = []
+        v = int(rec.get("visits", 0) or 0)
+        v = max(v, len(events))
+        rows.append(
+            {
+                "user_id": int(uid),
+                "first_name": rec.get("first_name"),
+                "last_name": rec.get("last_name"),
+                "username": rec.get("username"),
+                "clicks": int(rec.get("clicks", 0) or 0),
+                "visits": v,
+                "active": not bool(rec.get("unsubscribed_at")),
+            }
+        )
+    rows.sort(key=lambda r: (int(r.get("visits", 0) or 0), int(r.get("user_id", 0) or 0)), reverse=True)
+    total = len(rows)
+    o = max(int(offset or 0), 0)
+    l = max(int(limit or 0), 0)
+    return (rows[o : o + l], total)
+
+
+def top_admins_by_marked_visits_all_time(*, source: str | None = None, limit: int = 100) -> list[dict[str, Any]]:
+    """
+    Returns rows: {admin_id, visits} for admins who marked >=1 visit (all time).
+    """
+    data = _load()
+    users: dict[str, Any] = data.get("users", {})
+    src = (source or "").strip().lower() or None
+
+    counts: dict[int, int] = {}
+    for rec in users.values():
+        if not isinstance(rec, dict):
+            continue
+        events = rec.get("visit_events") or []
+        if not isinstance(events, list):
+            continue
+        for raw in events:
+            if not raw or not isinstance(raw, dict):
+                continue
+            if src is not None and _event_src(raw) != src:
+                continue
+            by = raw.get("by")
+            if by is None:
+                continue
+            try:
+                aid = int(by)
+            except Exception:
+                continue
+            counts[aid] = counts.get(aid, 0) + 1
+
+    rows = [{"admin_id": aid, "visits": v} for aid, v in counts.items() if v > 0]
+    rows.sort(key=lambda r: (int(r["visits"]), int(r["admin_id"])), reverse=True)
+    return rows[: int(limit or 100)]
+
+
 def get_user_stats(user_id: int) -> dict[str, Any] | None:
     data = _load()
     users = data.get("users", {})
