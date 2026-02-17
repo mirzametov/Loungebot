@@ -263,15 +263,18 @@ def guest_card_text(display_name: str, *, user_id: int | None = None) -> str:
     level_label = card.level if card else "IRON⚙️"
     card_number = card.card_number if card else "4821"
     base_discount = card.discount if card else 3
-    total_discount, bonus_discount = total_discount_for_user(user_id, base_discount)
     total_visits = card.visits if card else 0
 
     lvl_override = _staff_level_label(user_id, (card.username if card else None))
     if lvl_override:
         level_label = lvl_override
+        # Staff cards always have their own fixed discount regardless of stored tier discount.
+        base_discount = 10
 
     # New rule: registered users with 0 visits have no active level/discount yet.
     inactive_zero = bool(card and total_visits <= 0 and not lvl_override)
+    # Compute total/bonus discount after all overrides to avoid mismatches (e.g. SUPERADMIN label + 3%).
+    total_discount, bonus_discount = total_discount_for_user(user_id, base_discount)
     if inactive_zero:
         level_label = "-"
         base_discount = 0
@@ -1828,6 +1831,7 @@ def level_card_inline_text(*, username: str, user_id: int) -> str:
     lvl_override = _staff_level_label(user_id, username)
     if lvl_override:
         level_label = lvl_override
+        discount = 10
 
     total_disc, bonus_disc = total_discount_for_user(user_id, int(discount))
     medals = medals_for_user(user_id)
