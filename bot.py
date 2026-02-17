@@ -2296,13 +2296,14 @@ def _admin_stats_keyboard(*, mode: str, page: int, has_prev: bool, has_next: boo
                 pass
         return btn
 
-    nav: list[InlineKeyboardButton] = []
-    if has_prev:
-        nav.append(InlineKeyboardButton(text="◀", callback_data=f"admin_stats_view:{mode}:{max(page-1,0)}"))
-    if has_next:
-        nav.append(InlineKeyboardButton(text="▶", callback_data=f"admin_stats_view:{mode}:{page+1}"))
-    if nav:
-        kb.row(*nav)
+    # Always keep pager row to avoid "jumping" UI. When prev/next are unavailable,
+    # show arrows but route to a no-op callback.
+    prev_cb = f"admin_stats_view:{mode}:{max(page-1,0)}" if has_prev else "admin_stats_noop"
+    next_cb = f"admin_stats_view:{mode}:{page+1}" if has_next else "admin_stats_noop"
+    kb.row(
+        InlineKeyboardButton(text="◀", callback_data=prev_cb),
+        InlineKeyboardButton(text="▶", callback_data=next_cb),
+    )
 
     # Requested layout (2 columns):
     # 1) pager
@@ -2318,6 +2319,14 @@ def _admin_stats_keyboard(*, mode: str, page: int, has_prev: bool, has_next: boo
         InlineKeyboardButton(text="🏠 Домой", callback_data="back_to_main"),
     )
     return kb
+
+
+@bot.callback_query_handler(func=lambda call: call.data == "admin_stats_noop")
+def handle_admin_stats_noop(call: telebot.types.CallbackQuery) -> None:
+    # Keep spinner-free UX; do not modify messages.
+    if not _callback_guard(call):
+        return
+    return
 
 
 def _admin_stats_base_lines() -> list[str]:
