@@ -170,6 +170,31 @@ def _staff_level_label(user_id: int | None, username: str | None = None) -> str 
     return None
 
 
+def _ensure_staff_card(user: telebot.types.User | None) -> None:
+    """
+    Ensure staff users have a dedicated staff card in the LEVEL DB
+    (so they never appear as IRON/BRONZE/SILVER/GOLD).
+    """
+    if user is None or user.id is None:
+        return
+    uid = int(user.id)
+    uname = user.username if user else None
+    staff_level = _staff_level_label(uid, uname)
+    if not staff_level:
+        return
+    try:
+        set_staff_gold_by_user_id(
+            uid,
+            staff_level=staff_level,
+            username=(uname.strip().lstrip("@").lower() if isinstance(uname, str) else None),
+            first_name=getattr(user, "first_name", None),
+            last_name=getattr(user, "last_name", None),
+        )
+    except Exception:
+        # Best-effort only.
+        return
+
+
 def _iter_months_inclusive(start_y: int, start_m: int, end_y: int, end_m: int):
     """
     Yields (y, m) months from start to end inclusive.
@@ -1726,6 +1751,8 @@ def admin_visit_done_keyboard(back_cb: str) -> InlineKeyboardMarkup:
 
 
 def send_main_menu(chat_id: int, *, user: telebot.types.User | None) -> None:
+    # Staff should always have dedicated staff cards in DB (not tier cards).
+    _ensure_staff_card(user)
     superadmin = is_superadmin(user.id if user else None)
     admin = (not superadmin) and _is_admin(user)
     keyboard = main_inline_keyboard(superadmin=superadmin, admin=admin)
@@ -1856,6 +1883,8 @@ def send_level_menu(chat_id: int, user: telebot.types.User | None, user_id: int 
             first_name=(user.first_name if user else None),
             last_name=(user.last_name if user else None),
         )
+        # If this is staff, ensure their card is a staff card in DB too.
+        _ensure_staff_card(user)
         bot.send_message(
             chat_id,
             guest_card_text(display_name, user_id=user_id),
