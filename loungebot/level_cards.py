@@ -100,7 +100,8 @@ def _recalc(rec: dict[str, Any]) -> None:
         else:
             # Backward-compat: older records only had staff_gold.
             rec["level"] = "ADMIN🐧"
-        rec["discount"] = 10
+        # Staff discount can be overridden (e.g. owners). Default: 10.
+        rec["discount"] = int(rec.get("staff_discount", 10) or 10)
         return
     visits = int(rec.get("visits", 0) or 0)
     lvl, disc = tier_for_visits(visits)
@@ -188,6 +189,7 @@ def ensure_level_card(
         "visits": 0,
         "staff_gold": False,
         "staff_level": None,
+        "staff_discount": None,
     }
     _recalc(by_number[card_number])
     # Keep field for backward compatibility; not used for allocation anymore.
@@ -247,15 +249,17 @@ def set_staff_gold_by_user_id(
     user_id: int,
     *,
     staff_level: str | None = None,
+    staff_discount: int | None = None,
     username: str | None = None,
     first_name: str | None = None,
     last_name: str | None = None,
 ) -> LevelCard:
+    # Ensure card exists.
+    card = ensure_level_card(user_id, username=username, first_name=first_name, last_name=last_name)
+    # Reload to ensure we see records created/updated by ensure_level_card().
     data = _load()
     by_user = data.get("by_user") or {}
     by_number = data.get("by_number") or {}
-    # Ensure card exists.
-    card = ensure_level_card(user_id, username=username, first_name=first_name, last_name=last_name)
     num = by_user.get(str(int(user_id))) or card.card_number
     rec = by_number.get(str(num))
     if not isinstance(rec, dict):
@@ -264,6 +268,11 @@ def set_staff_gold_by_user_id(
     rec["staff_gold"] = True
     if staff_level:
         rec["staff_level"] = str(staff_level)
+    if staff_discount is not None:
+        try:
+            rec["staff_discount"] = int(staff_discount)
+        except Exception:
+            rec["staff_discount"] = 10
     if username:
         rec["username"] = username
     if first_name:
@@ -287,6 +296,7 @@ def clear_staff_gold_by_user_id(user_id: int) -> LevelCard | None:
         return None
     rec["staff_gold"] = False
     rec.pop("staff_level", None)
+    rec.pop("staff_discount", None)
     _recalc(rec)
     _save(data)
     return _to_card(str(num), rec)

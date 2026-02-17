@@ -186,6 +186,7 @@ def _ensure_staff_card(user: telebot.types.User | None) -> None:
         set_staff_gold_by_user_id(
             uid,
             staff_level=staff_level,
+            staff_discount=staff_discount_for_user(uid),
             username=(uname.strip().lstrip("@").lower() if isinstance(uname, str) else None),
             first_name=getattr(user, "first_name", None),
             last_name=getattr(user, "last_name", None),
@@ -269,6 +270,27 @@ def total_discount_for_user(user_id: int | None, base_discount: int) -> tuple[in
     total = int(base_discount) + int(bonus)
     return (total, bonus)
 
+def is_owner(user_id: int | None) -> bool:
+    """
+    Owners are a subset of superadmins with a special 100% staff discount.
+    Config: OWNER_IDS=1,2,3
+    """
+    if user_id is None:
+        return False
+    raw = (os.getenv("OWNER_IDS", "") or "").strip()
+    if not raw:
+        return False
+    try:
+        ids = {int(x.strip()) for x in raw.split(",") if x.strip()}
+    except ValueError:
+        return False
+    return int(user_id) in ids
+
+
+def staff_discount_for_user(user_id: int | None) -> int:
+    # Default staff discount: 10%. Owners: 100%.
+    return 100 if is_owner(user_id) else 10
+
 
 def _visits_word(n: int) -> str:
     v = abs(int(n))
@@ -293,18 +315,20 @@ def guest_card_text(display_name: str, *, user_id: int | None = None) -> str:
     lvl_override = _staff_level_label(user_id, (card.username if card else None))
     if lvl_override:
         level_label = lvl_override
-        # Staff cards always have their own fixed discount regardless of stored tier discount.
-        base_discount = 10
+        # Staff cards have a dedicated discount (10 by default, 100 for owners).
+        base_discount = staff_discount_for_user(user_id)
 
     # New rule: registered users with 0 visits have no active level/discount yet.
     inactive_zero = bool(card and total_visits <= 0 and not lvl_override)
-    # Compute total/bonus discount after all overrides to avoid mismatches (e.g. SUPERADMIN label + 3%).
-    total_discount, bonus_discount = total_discount_for_user(user_id, base_discount)
+    # Lounge discount can include rating bonus; Prohvat72 discount never includes rating bonus (max 10%).
+    lounge_total_discount, bonus_discount = total_discount_for_user(user_id, base_discount)
+    prohvat_discount = min(int(base_discount), 10)
     if inactive_zero:
         level_label = "-"
         base_discount = 0
         bonus_discount = 0
-        total_discount = 0
+        lounge_total_discount = 0
+        prohvat_discount = 0
 
     if user_id is not None and is_superadmin(int(user_id)):
         header_line = f"Твой уровень: <b>{escape(level_label)}</b>"
@@ -326,13 +350,8 @@ def guest_card_text(display_name: str, *, user_id: int | None = None) -> str:
         # Unregistered fallback copy.
         progress_line = f"До <b>BRONZE🥉</b> осталось: <b>5 {_visits_word(5)}</b>"
 
-    if bonus_discount > 0:
-        discount_line = (
-            f"Скидка: <b>{base_discount}%</b>, плюс <b>{bonus_discount}%</b>\n"
-            f"Общая скидка: <b>{total_discount}%</b>"
-        )
-    else:
-        discount_line = f"Скидка: <b>{base_discount}%</b>"
+    # Show a single final discount number (already includes rating bonus for Lounge).
+    discount_line = f"Скидка: <b>{lounge_total_discount}%</b>"
 
     medals = medals_for_user(user_id)
     medals_line = f"Всего медалей: {medals}" if medals else ""
@@ -352,11 +371,11 @@ def guest_card_text(display_name: str, *, user_id: int | None = None) -> str:
             "(нужен <b>1 визит</b> для активации скидки)\n"
             f"Номер карты: <b>{escape(card_number)}</b>\n\n"
             f"Всего визитов: <b>{total_visits}</b>\n"
-            f"Скидка: <b>{base_discount}%</b>\n"
+            f"Скидка: <b>{lounge_total_discount}%</b>\n"
             "До <b>IRON⚙️</b> осталось: <b>1 визит</b>\n\n"
             "Твой уровень даёт:\n"
-            f"• скидка <b>{total_discount}%</b> на меню <b><a href=\"https://t.me/nagrani_lounge\">Lounge</a></b>\n"
-            f"• скидка <b>{total_discount}%</b> на <b><a href=\"https://t.me/prohvat72\">Прохват72</a></b>\n"
+            f"• скидка <b>{lounge_total_discount}%</b> на меню <b><a href=\"https://t.me/nagrani_lounge\">Lounge</a></b>\n"
+            f"• скидка <b>{prohvat_discount}%</b> на <b><a href=\"https://t.me/prohvat72\">Прохват72</a></b>\n"
         )
 
     return (
@@ -369,8 +388,8 @@ def guest_card_text(display_name: str, *, user_id: int | None = None) -> str:
         + (f"\n{medals_line}" if medals_line else "")
         + "\n\n"
         + "Твой уровень даёт:\n"
-        + f"• скидка <b>{total_discount}%</b> на меню <b><a href=\"https://t.me/nagrani_lounge\">Lounge</a></b>\n"
-        + f"• скидка <b>{total_discount}%</b> на <b><a href=\"https://t.me/prohvat72\">Прохват72</a></b>\n"
+        + f"• скидка <b>{lounge_total_discount}%</b> на меню <b><a href=\"https://t.me/nagrani_lounge\">Lounge</a></b>\n"
+        + f"• скидка <b>{prohvat_discount}%</b> на <b><a href=\"https://t.me/prohvat72\">Прохват72</a></b>\n"
     )
 
 def is_superadmin(user_id: int | None) -> bool:
@@ -1438,6 +1457,7 @@ def _callback_guard(call: telebot.types.CallbackQuery, window_s: float = 1.5) ->
                 set_staff_gold_by_user_id(
                     user_id,
                     staff_level=staff_level,
+                    staff_discount=staff_discount_for_user(user_id),
                     username=call.from_user.username,
                     first_name=call.from_user.first_name,
                     last_name=call.from_user.last_name,
@@ -1496,6 +1516,7 @@ def _message_guard(message: telebot.types.Message, window_s: float = 2.0) -> boo
                 set_staff_gold_by_user_id(
                     message.from_user.id,
                     staff_level=staff_level,
+                    staff_discount=staff_discount_for_user(message.from_user.id),
                     username=message.from_user.username,
                     first_name=message.from_user.first_name,
                     last_name=message.from_user.last_name,
@@ -1858,9 +1879,11 @@ def level_card_inline_text(*, username: str, user_id: int) -> str:
     lvl_override = _staff_level_label(user_id, username)
     if lvl_override:
         level_label = lvl_override
-        discount = 10
+        discount = staff_discount_for_user(user_id)
 
-    total_disc, bonus_disc = total_discount_for_user(user_id, int(discount))
+    # Lounge discount can include rating bonus; Prohvat72 discount never includes rating bonus (max 10%).
+    lounge_total_disc, _bonus_disc = total_discount_for_user(user_id, int(discount))
+    prohvat_disc = min(int(discount), 10)
     medals = medals_for_user(user_id)
     medals_line = f"Всего медалей: {medals}\n" if medals else ""
     u = username.strip().lstrip("@")
@@ -1870,7 +1893,9 @@ def level_card_inline_text(*, username: str, user_id: int) -> str:
         f"Номер карты: <b>{escape(str(card_number))}</b>\n\n"
         f"Всего визитов: <b>{int(vtotal)}</b>\n"
         f"{medals_line}"
-        f"Общая скидка: <b>{int(total_disc)}%</b>"
+        f"Скидка: <b>{int(lounge_total_disc)}%</b>\n\n"
+        f"• на меню <b>Lounge</b>: <b>{int(lounge_total_disc)}%</b>\n"
+        f"• на <b>Прохват72</b>: <b>{int(prohvat_disc)}%</b>"
     )
 
 
@@ -1930,7 +1955,8 @@ def level_visits_text() -> str:
         "• 🥇 +10% на следующий месяц\n"
         "• 🥈 +6% на следующий месяц\n"
         "• 🥉 +3% на следующий месяц\n"
-        "• общая скидка = скидка LEVEL + бонус рейтинга\n\n"
+        "• общая скидка = скидка LEVEL + бонус рейтинга\n"
+        "• дополнительная скидка не распространяется на Прохват72\n\n"
         "<b>🔥 О РОЗЫГРЫШЕ</b>\n\n"
         "<b>Условия простые:</b>\n"
         "• Участвуют все владельцы карт <b>SILVER</b> и <b>GOLD</b>\n"
@@ -2773,7 +2799,7 @@ def handle_admin_add_input(message: telebot.types.Message) -> None:
     try:
         uid = find_user_id_by_username(username)
         if uid is not None:
-            set_staff_gold_by_user_id(uid, staff_level="ADMIN🐧", username=username)
+            set_staff_gold_by_user_id(uid, staff_level="ADMIN🐧", staff_discount=staff_discount_for_user(uid), username=username)
     except Exception:
         pass
     bot.send_message(message.chat.id, f"Готово. Добавил админа: <b>@{escape(username)}</b>")
