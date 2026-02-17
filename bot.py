@@ -427,7 +427,7 @@ def main_inline_keyboard(*, superadmin: bool, admin: bool) -> InlineKeyboardMark
     if superadmin:
         keyboard.row(
             InlineKeyboardButton(
-                text=f"👀 SuperAdmin {active_subscribers_count()}",
+                text=f"👀 суперадмин {active_subscribers_count()}",
                 callback_data="main_admin",
             )
         )
