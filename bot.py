@@ -516,7 +516,7 @@ def main_inline_keyboard(*, superadmin: bool, admin: bool) -> InlineKeyboardMark
     if superadmin:
         keyboard.row(
             InlineKeyboardButton(
-                text=f"👀 суперадмин {active_subscribers_count()}",
+                text=f"👀superadmin {active_subscribers_count()}",
                 callback_data="main_admin",
             )
         )
@@ -2311,9 +2311,9 @@ def _admin_stats_keyboard(*, mode: str, page: int, has_prev: bool, has_next: boo
     # 2) Визиты | Клики
     # 3) Список визитов | Подписчики
     # 4) Топ кнопок | Админы
-    kb.row(_tab("🏆 Визиты", "top_visits"), _tab("👆 Клики", "top_clicks"))
-    kb.row(_tab("🧾 Список визитов", "visits_list"), _tab("💰 Подписчики", "latest"))
-    kb.row(_tab("🔥 Топ экранов", "top_actions"), _tab("🐧 Админы", "admins_visits"))
+    kb.row(_tab("🏆Визиты", "top_visits"), _tab("👆Клики", "top_clicks"))
+    kb.row(_tab("🧾Список визитов", "visits_list"), _tab("💰Подписчики", "latest"))
+    kb.row(_tab("🔥Топ экранов", "top_actions"), _tab("🐧Админы", "admins_visits"))
 
     kb.row(
         InlineKeyboardButton(text="👈Назад", callback_data="admin_menu"),
@@ -2536,7 +2536,29 @@ def _admin_stats_section_lines(*, mode: str, page: int) -> tuple[list[str], bool
         return (lines, has_prev, has_next)
 
     if mode == "top_actions":
-        rows, total = top_actions_paged(offset=offset, limit=per_page)
+        # Load full ranking once and filter out internal/staff-only actions for readability.
+        raw_rows, _raw_total = top_actions_paged(offset=0, limit=1000000)
+
+        hidden_bases = {
+            # Staff-only / internal navigation.
+            "main_admin",
+            "main_add_visit",
+            "admin_menu",
+            "admin_stats",
+            "admin_stats_view",
+            "admin_stats_noop",
+        }
+
+        filtered: list[dict[str, object]] = []
+        for r in raw_rows:
+            action = str(r.get("action") or "")
+            base = action.split(":", 1)[0]
+            if base.startswith("admin_") or base in hidden_bases:
+                continue
+            filtered.append(r)
+
+        total = len(filtered)
+        rows = filtered[offset : offset + per_page]
         has_next = (offset + per_page) < total
         lines.append("<b>Топ экранов</b>")
         if not rows:
@@ -2560,19 +2582,17 @@ def _admin_stats_section_lines(*, mode: str, page: int) -> tuple[list[str], bool
             "menu_drinks": "Меню: Напитки",
             "menu_food": "Меню: Еда",
             "menu_rules": "Меню: Алкоголь",
-            "main_admin": "суперадмин",
-            "admin_stats": "Статистика",
         }
 
-        for i, row in enumerate(rows, start=offset + 1):
+        display_rows: list[tuple[str, int]] = []
+        for row in rows:
             action = str(row.get("action") or "")
             cnt = int(row.get("count", 0) or 0)
-            # Normalize: drop parameters after ":" for aggregation display.
             base = action.split(":", 1)[0]
             human = label_map.get(base, base)
-            # Hide internal/admin-only actions in this view.
-            if human.startswith("admin_") or base.startswith("admin_"):
-                continue
+            display_rows.append((human, cnt))
+
+        for i, (human, cnt) in enumerate(display_rows, start=offset + 1):
             prefix = _rank_prefix(i)
             lines.append(f"{prefix}<b>{escape(human)}</b> - <b>{cnt}</b>")
         return (lines, has_prev, has_next)
