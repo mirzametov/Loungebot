@@ -1515,7 +1515,10 @@ def _callback_guard(call: telebot.types.CallbackQuery, window_s: float = 1.5) ->
         # Global UI action counter (used for "Топ экранов"), only for non-staff users.
         try:
             if call.from_user and not _is_staff(call.from_user):
-                inc_action(call.data or "")
+                base = (call.data or "").split(":", 1)[0]
+                # Exclude navigation actions: we track only meaningful screens.
+                if base not in {"back_to_main", "admin_menu", "admin_stats_noop"}:
+                    inc_action(base)
         except Exception:
             pass
     except Exception:
@@ -2297,14 +2300,16 @@ def _admin_stats_keyboard(*, mode: str, page: int, has_prev: bool, has_next: boo
                 pass
         return btn
 
-    # Always keep pager row to avoid "jumping" UI. When prev/next are unavailable,
-    # show arrows but route to a no-op callback.
-    prev_cb = f"admin_stats_view:{mode}:{max(page-1,0)}" if has_prev else "admin_stats_noop"
+    # Pager: keep the right arrow always visible. Show the left arrow only when available.
     next_cb = f"admin_stats_view:{mode}:{page+1}" if has_next else "admin_stats_noop"
-    kb.row(
-        InlineKeyboardButton(text="◀", callback_data=prev_cb),
-        InlineKeyboardButton(text="▶", callback_data=next_cb),
-    )
+    if has_prev:
+        prev_cb = f"admin_stats_view:{mode}:{max(page-1,0)}"
+        kb.row(
+            InlineKeyboardButton(text="◀", callback_data=prev_cb),
+            InlineKeyboardButton(text="▶", callback_data=next_cb),
+        )
+    else:
+        kb.row(InlineKeyboardButton(text="▶", callback_data=next_cb))
 
     # Requested layout (2 columns):
     # 1) pager
@@ -2547,6 +2552,9 @@ def _admin_stats_section_lines(*, mode: str, page: int) -> tuple[list[str], bool
             "admin_stats",
             "admin_stats_view",
             "admin_stats_noop",
+            "back_to_main",
+            "level_tab",
+            "interior",
         }
 
         filtered: list[dict[str, object]] = []
