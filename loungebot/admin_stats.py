@@ -125,6 +125,22 @@ def touch_user(user: UserInfo) -> None:
 
     _save(data)
 
+def inc_action(action: str) -> None:
+    """
+    Increment global counter for a UI action (callback_data/command).
+    Used for "Топ кнопок" statistics.
+    """
+    a = (action or "").strip()
+    if not a:
+        return
+    data = _load()
+    actions = data.setdefault("actions", {})
+    if not isinstance(actions, dict):
+        actions = {}
+        data["actions"] = actions
+    actions[a] = int(actions.get(a, 0) or 0) + 1
+    _save(data)
+
 
 def _last_broadcast_ts(rec: dict[str, Any]) -> datetime | None:
     events = rec.get("broadcast_events") or []
@@ -437,6 +453,62 @@ def add_visit(user_id: int) -> None:
             events.append(_now().isoformat())
         rec.setdefault("last_click_at", None)
     _save(data)
+
+
+def recent_visit_events(*, offset: int = 0, limit: int = 10, source: str | None = None) -> tuple[list[dict[str, Any]], int]:
+    """
+    Most recent confirmed visit events across all users (desc by timestamp).
+    Rows include: {user_id, ts, by, src}
+    """
+    data = _load()
+    users: dict[str, Any] = data.get("users", {})
+    src = (source or "").strip().lower() or None
+    rows: list[dict[str, Any]] = []
+    for uid, rec in users.items():
+        if not isinstance(rec, dict):
+            continue
+        events = rec.get("visit_events") or []
+        if not isinstance(events, list):
+            continue
+        for raw in events:
+            if not raw or not isinstance(raw, dict):
+                continue
+            if src is not None and _event_src(raw) != src:
+                continue
+            ts_raw = raw.get("ts")
+            if not ts_raw:
+                continue
+            rows.append(
+                {
+                    "user_id": int(uid),
+                    "ts": str(ts_raw),
+                    "by": raw.get("by"),
+                    "src": _event_src(raw),
+                }
+            )
+
+    def _key(r: dict[str, Any]) -> tuple[str, int]:
+        return (str(r.get("ts") or ""), int(r.get("user_id") or 0))
+
+    rows.sort(key=_key, reverse=True)
+    total = len(rows)
+    o = max(int(offset or 0), 0)
+    l = max(int(limit or 0), 0)
+    return (rows[o : o + l], total)
+
+
+def top_actions_paged(*, offset: int = 0, limit: int = 10) -> tuple[list[dict[str, Any]], int]:
+    data = _load()
+    actions = data.get("actions", {}) or {}
+    if not isinstance(actions, dict):
+        return ([], 0)
+    rows = [{"action": k, "count": int(v or 0)} for k, v in actions.items()]
+    rows = [r for r in rows if int(r.get("count", 0) or 0) > 0]
+    rows.sort(key=lambda r: (int(r["count"]), str(r["action"])), reverse=True)
+    total = len(rows)
+    o = max(int(offset or 0), 0)
+    l = max(int(limit or 0), 0)
+    return (rows[o : o + l], total)
 
 def add_visit_marked(user_id: int, admin_id: int, *, source: str | None = None) -> None:
     """

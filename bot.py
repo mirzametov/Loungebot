@@ -29,15 +29,18 @@ from loungebot.admin_stats import (
     admin_marked_visits_counts,
     admin_marked_visits_summary,
     admin_marked_recent_clients_page,
+    inc_action,
     find_user_id_by_username,
     get_user_stats,
     has_click_in_last_days,
     inc_click,
+    recent_visit_events,
     recent_subscribers,
     subscribed_counts,
     top_by_clicks,
     top_by_clicks_paged,
     top_by_visits_paged,
+    top_actions_paged,
     top_admins_by_marked_visits_all_time,
     top_admins_by_marked_visits,
     touch_user,
@@ -1476,6 +1479,11 @@ def _callback_guard(call: telebot.types.CallbackQuery, window_s: float = 1.5) ->
                 # recalculate their LEVEL from visits.
                 clear_staff_gold_by_user_id(user_id)
         inc_click(user_id)
+        # Global UI action counter (used for "Топ кнопок").
+        try:
+            inc_action(call.data or "")
+        except Exception:
+            pass
     except Exception:
         # If we can't compute a key, still allow processing once.
         return True
@@ -2238,7 +2246,8 @@ def handle_admin_stats(call: telebot.types.CallbackQuery) -> None:
 
     _pending_admin_add.discard(call.message.chat.id)
     _pending_visit_add.pop(call.message.chat.id, None)
-    _send_or_edit_admin_stats(call, mode="latest", page=0)
+    # Default view: visits leaderboard.
+    _send_or_edit_admin_stats(call, mode="top_visits", page=0)
 
 
 def _admin_stats_keyboard(*, mode: str, page: int, has_prev: bool, has_next: bool) -> InlineKeyboardMarkup:
@@ -2261,9 +2270,14 @@ def _admin_stats_keyboard(*, mode: str, page: int, has_prev: bool, has_next: boo
     if nav:
         kb.row(*nav)
 
-    # Order: visits, subscribers, clicks, admins.
-    kb.row(_tab("🏆 Визиты", "top_visits"), _tab("🕒 Подписчики", "latest"))
-    kb.row(_tab("👆 Клики", "top_clicks"), _tab("🛡 Админы", "admins_visits"))
+    # Requested layout (2 columns):
+    # 1) pager
+    # 2) Визиты | Клики
+    # 3) Список визитов | Подписчики
+    # 4) Топ кнопок | Админы
+    kb.row(_tab("🏆 Визиты", "top_visits"), _tab("👆 Клики", "top_clicks"))
+    kb.row(_tab("🧾 Список визитов", "visits_list"), _tab("🕒 Подписчики", "latest"))
+    kb.row(_tab("🔥 Топ кнопок", "top_actions"), _tab("🛡 Админы", "admins_visits"))
 
     kb.row(
         InlineKeyboardButton(text="👈Назад", callback_data="admin_menu"),
@@ -2376,6 +2390,52 @@ def _admin_stats_section_lines(*, mode: str, page: int) -> tuple[list[str], bool
             lines.append(f'<a href="{_tg_user_link(uid, username)}"><b>{name}</b></a>')
         return (lines, has_prev, has_next)
 
+    if mode == "visits_list":
+        rows, total = recent_visit_events(offset=offset, limit=per_page, source=BOT_SOURCE)
+        has_next = (offset + per_page) < total
+        lines.append("<b>Список визитов</b>")
+        if not rows:
+            lines.append("Нет данных.")
+            return (lines, has_prev, has_next)
+
+        tz = _tyumen_now().tzinfo
+        buf = list(reversed(rows))  # oldest -> newest in page (newest at bottom)
+        current_date = None
+        for row in buf:
+            uid = int(row.get("user_id") or 0)
+            stats = get_user_stats(uid) or {}
+            username = stats.get("username")
+            if isinstance(username, str):
+                username = username.strip().lstrip("@") or None
+            else:
+                username = None
+            name = stats.get("first_name") or stats.get("last_name") or (f"@{username}" if username else None) or str(uid)
+            name = escape(str(name))
+
+            raw = row.get("ts")
+            dt = None
+            try:
+                dt = datetime.fromisoformat(str(raw)) if raw else None
+            except Exception:
+                dt = None
+            time_s = ""
+            if dt is not None:
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=datetime.now().astimezone().tzinfo)
+                dt = dt.astimezone(tz)
+                dkey = _fmt_date_ymd(dt)
+                time_s = f"{dt.hour:02d}:{dt.minute:02d} "
+            else:
+                dkey = "Дата неизвестна"
+
+            if dkey != current_date:
+                current_date = dkey
+                lines.append("")
+                lines.append(f"<b>{escape(dkey)}</b>")
+
+            lines.append(f'{escape(time_s)}<a href="{_tg_user_link(uid, username)}"><b>{name}</b></a>')
+        return (lines, has_prev, has_next)
+
     if mode == "top_visits":
         rows, total = top_by_visits_paged(offset=offset, limit=per_page, active_only=True)
         has_next = (offset + per_page) < total
@@ -2431,6 +2491,35 @@ def _admin_stats_section_lines(*, mode: str, page: int) -> tuple[list[str], bool
             lines.append(f'{prefix}<a href="{_tg_user_link(aid, u)}"><b>{escape(label)}</b></a> - визитов <b>{v}</b>')
         return (lines, has_prev, has_next)
 
+    if mode == "top_actions":
+        rows, total = top_actions_paged(offset=offset, limit=per_page)
+        has_next = (offset + per_page) < total
+        lines.append("<b>Топ кнопок</b>")
+        if not rows:
+            lines.append("Нет данных.")
+            return (lines, has_prev, has_next)
+
+        # Friendly labels for common actions.
+        label_map = {
+            "back_to_main": "Домой",
+            "main_level": "Карта LEVEL",
+            "main_menu": "Меню",
+            "main_booking": "Бронь",
+            "main_location": "Найти нас",
+            "main_admin": "суперадмин",
+            "admin_stats": "Статистика",
+        }
+
+        for i, row in enumerate(rows, start=offset + 1):
+            action = str(row.get("action") or "")
+            cnt = int(row.get("count", 0) or 0)
+            # Normalize: drop parameters after ":" for aggregation display.
+            base = action.split(":", 1)[0]
+            human = label_map.get(base, base)
+            prefix = _rank_prefix(i)
+            lines.append(f"{prefix}<b>{escape(human)}</b> - <b>{cnt}</b>")
+        return (lines, has_prev, has_next)
+
     # top_clicks (default)
     rows, total = top_by_clicks_paged(offset=offset, limit=per_page, active_only=True)
     has_next = (offset + per_page) < total
@@ -2471,9 +2560,12 @@ def _send_or_edit_admin_stats(call: telebot.types.CallbackQuery, *, mode: str, p
                 disable_web_page_preview=True,
             )
             return
-    except Exception:
-        # Message might be not editable or unchanged; fall back to send.
-        pass
+    except Exception as e:
+        # Don't spam new messages when user taps the already-selected tab/page.
+        msg = str(e).lower()
+        if "message is not modified" in msg or "message_not_modified" in msg:
+            return
+        # Message might be not editable for other reasons; fall back to send.
     bot.send_message(call.message.chat.id if call.message else call.from_user.id, text, reply_markup=kb, disable_web_page_preview=True)
 
 
