@@ -103,6 +103,39 @@ _MEDAL_BY_PLACE = {1: "🥇", 2: "🥈", 3: "🥉"}
 _inline_photo_file_id: str | None = None
 
 
+def _patch_inline_button_style() -> None:
+    """
+    PyTelegramBotAPI (telebot) ignores unknown kwargs in InlineKeyboardButton.to_dict(),
+    so Bot API 'style' (primary/success/danger) would never be sent.
+    Patch to_dict() to include `style` when set as an attribute.
+    """
+    try:
+        from telebot.types import InlineKeyboardButton as _Btn  # type: ignore
+    except Exception:
+        return
+    if getattr(_Btn, "_style_patched", False):
+        return
+    orig = getattr(_Btn, "to_dict", None)
+    if not callable(orig):
+        return
+
+    def _to_dict(self):  # type: ignore[no-redef]
+        d = orig(self)
+        style = getattr(self, "style", None)
+        if style:
+            d["style"] = style
+        return d
+
+    try:
+        _Btn.to_dict = _to_dict  # type: ignore[assignment]
+        _Btn._style_patched = True  # type: ignore[attr-defined]
+    except Exception:
+        return
+
+
+_patch_inline_button_style()
+
+
 def _tyumen_now() -> datetime:
     try:
         return datetime.now(ZoneInfo("Asia/Tyumen"))
@@ -2254,13 +2287,14 @@ def _admin_stats_keyboard(*, mode: str, page: int, has_prev: bool, has_next: boo
     kb = InlineKeyboardMarkup()
 
     def _tab(text: str, m: str) -> InlineKeyboardButton:
-        # Use Bot API 9.4+ button styles if supported by the library.
+        btn = InlineKeyboardButton(text=text, callback_data=f"admin_stats_view:{m}:0")
         if m == mode:
+            # Patched in _patch_inline_button_style() above.
             try:
-                return InlineKeyboardButton(text=text, callback_data=f"admin_stats_view:{m}:0", style="primary")
+                setattr(btn, "style", "primary")
             except Exception:
-                return InlineKeyboardButton(text=text, callback_data=f"admin_stats_view:{m}:0")
-        return InlineKeyboardButton(text=text, callback_data=f"admin_stats_view:{m}:0")
+                pass
+        return btn
 
     nav: list[InlineKeyboardButton] = []
     if has_prev:
