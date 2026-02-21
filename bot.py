@@ -2988,10 +2988,9 @@ def _admin_stats_section_lines(*, mode: str, page: int) -> tuple[list[str], bool
             username = None
         name = escape(_display_first_name(uid, fallback_username=username))
         clicks = int(row.get("clicks", 0) or 0)
-        visits = int(row.get("visits", 0) or 0)
         prefix = _rank_prefix(i)
         lines.append(
-            f'{prefix}<a href="{_admin_user_deep_link(uid)}"><b>{name}</b></a> - кликов <b>{clicks}</b>, визитов <b>{visits}</b>'
+            f'{prefix}<a href="{_admin_user_deep_link(uid)}"><b>{name}</b></a> - кликов <b>{clicks}</b>'
         )
     return (lines, has_prev, has_next)
 
