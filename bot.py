@@ -2186,6 +2186,17 @@ def send_booking_menu(chat_id: int) -> None:
     )
 
 
+def _delete_command_message(message: telebot.types.Message) -> None:
+    """
+    Best-effort delete of the incoming command message.
+    In some chats this requires extra admin rights, so ignore failures.
+    """
+    try:
+        bot.delete_message(message.chat.id, message.message_id)
+    except Exception:
+        return
+
+
 @bot.message_handler(commands=["start"])
 def handle_start(message: telebot.types.Message) -> None:
     if not _message_guard(message):
@@ -2200,13 +2211,16 @@ def handle_start(message: telebot.types.Message) -> None:
     if payload == "pitbike":
         # Deep-link: show the pitbike photo directly (no gallery UI).
         send_pitbike_photo(message.chat.id)
+        _delete_command_message(message)
         return
     if payload == "mangal_kebab":
         # Deep-link: show partner food photo directly (no extra UI).
         send_mangal_kebab_photo(message.chat.id)
+        _delete_command_message(message)
         return
 
     send_main_menu(message.chat.id, user=message.from_user)
+    _delete_command_message(message)
 
 
 @bot.message_handler(commands=["level"])
@@ -2219,6 +2233,7 @@ def handle_level_command(message: telebot.types.Message) -> None:
         send_level_menu(message.chat.id, message.from_user, user_id)
     except Exception as e:
         bot.send_message(message.chat.id, f"Ошибка при открытии LEVEL: <code>{escape(str(e))}</code>")
+    _delete_command_message(message)
 
 
 @bot.message_handler(commands=["menu"])
@@ -2226,6 +2241,7 @@ def handle_menu_command(message: telebot.types.Message) -> None:
     if not _message_guard(message):
         return
     send_food_menu(message.chat.id)
+    _delete_command_message(message)
 
 
 @bot.message_handler(commands=["booking"])
@@ -2238,6 +2254,7 @@ def handle_booking_command(message: telebot.types.Message) -> None:
         f'🛋 <a href="{booking_deep_link()}">Открыть чат бронирования</a>',
         disable_web_page_preview=True,
     )
+    _delete_command_message(message)
 
 
 @bot.message_handler(commands=["location"])
@@ -2245,6 +2262,7 @@ def handle_location_command(message: telebot.types.Message) -> None:
     if not _message_guard(message):
         return
     send_location_menu(message.chat.id)
+    _delete_command_message(message)
 
 
 @bot.message_handler(commands=["version", "ver", "v"])
@@ -2253,6 +2271,7 @@ def handle_version_command(message: telebot.types.Message) -> None:
         return
     # Visible to anyone; it's safe and helps verify which build is running.
     bot.send_message(message.chat.id, _build_info_text(), disable_web_page_preview=True)
+    _delete_command_message(message)
 
 
 @bot.callback_query_handler(func=lambda call: call.data == "main_admin")
