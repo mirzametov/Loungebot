@@ -2905,7 +2905,7 @@ def _admin_stats_section_lines(*, mode: str, page: int) -> tuple[list[str], bool
             u = (u or "").strip().lstrip("@") or None
             label = _display_first_name(aid, fallback_username=u)
             prefix = _rank_prefix(i)
-            lines.append(f'{prefix}<a href="{_admin_user_deep_link(aid)}"><b>{escape(label)}</b></a> - обслужил <b>{v}</b>')
+            lines.append(f'{prefix}<a href="{_admin_user_deep_link(aid)}"><b>{escape(label)}</b></a> - принял гостей <b>{v}</b>')
         return (lines, has_prev, has_next)
 
     if mode == "top_actions":
