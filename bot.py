@@ -2219,6 +2219,21 @@ def handle_start(message: telebot.types.Message) -> None:
         send_mangal_kebab_photo(message.chat.id)
         _delete_command_message(message)
         return
+    if payload.startswith("admincards_"):
+        # Deep-link from admin statistics text: open card owners list by tier.
+        # Format: admincards_<tier>_<page>
+        if not is_superadmin(message.from_user.id if message.from_user else None):
+            _delete_command_message(message)
+            return
+        parts = payload.split("_")
+        tier = (parts[1] if len(parts) > 1 else "iron").strip().lower()
+        try:
+            page = int(parts[2]) if len(parts) > 2 else 0
+        except Exception:
+            page = 0
+        _send_admin_cards_list(message.chat.id, tier=tier, page=max(page, 0))
+        _delete_command_message(message)
+        return
 
     send_main_menu(message.chat.id, user=message.from_user)
     _delete_command_message(message)
@@ -2330,7 +2345,6 @@ def _admin_stats_keyboard(
     page: int,
     has_prev: bool,
     has_next: bool,
-    card_counts: dict[str, int],
 ) -> InlineKeyboardMarkup:
     kb = InlineKeyboardMarkup()
 
@@ -2363,14 +2377,6 @@ def _admin_stats_keyboard(
     kb.row(_tab("🏆Визиты", "top_visits"), _tab("👆Клики", "top_clicks"))
     kb.row(_tab("🧾Список визитов", "visits_list"), _tab("💰Подписчики", "latest"))
     kb.row(_tab("🔥Топ экранов", "top_actions"), _tab("🐧Админы", "admins_visits"))
-    kb.row(
-        InlineKeyboardButton(text=f"⚙️IRON {int(card_counts.get('iron', 0))}", callback_data="admin_cards:iron:0"),
-        InlineKeyboardButton(text=f"🥉BRONZE {int(card_counts.get('bronze', 0))}", callback_data="admin_cards:bronze:0"),
-    )
-    kb.row(
-        InlineKeyboardButton(text=f"🥈SILVER {int(card_counts.get('silver', 0))}", callback_data="admin_cards:silver:0"),
-        InlineKeyboardButton(text=f"🥇GOLD {int(card_counts.get('gold', 0))}", callback_data="admin_cards:gold:0"),
-    )
 
     kb.row(
         InlineKeyboardButton(text="👈Назад", callback_data="admin_menu"),
@@ -2403,13 +2409,20 @@ def _admin_stats_base_lines() -> list[str]:
     lines.append(f"Подписались за 30 дней: <b>{subs_30}</b>")
 
     counts, _users = _card_tier_counts_and_users()
+    bot_username = (os.getenv("BOT_USERNAME", "") or "").strip().lstrip("@")
+    def _tier_line(key: str, icon: str, label: str) -> str:
+        n = int(counts.get(key, 0))
+        if not bot_username:
+            return f"<b>{icon} {label}: {n}</b>"
+        url = f"https://t.me/{bot_username}?start=admincards_{key}_0"
+        return f'<b><a href="{url}">{icon} {label}: {n}</a></b>'
 
     lines.append("")
     lines.append("🪪 <b>Выдано карт</b> <b>LEVEL</b>")
-    lines.append(f"<b>⚙️ IRON: {int(counts.get('iron', 0))}</b>")
-    lines.append(f"<b>🥉 BRONZE: {int(counts.get('bronze', 0))}</b>")
-    lines.append(f"<b>🥈 SILVER: {int(counts.get('silver', 0))}</b>")
-    lines.append(f"<b>🥇 GOLD: {int(counts.get('gold', 0))}</b>")
+    lines.append(_tier_line("iron", "⚙️", "IRON"))
+    lines.append(_tier_line("bronze", "🥉", "BRONZE"))
+    lines.append(_tier_line("silver", "🥈", "SILVER"))
+    lines.append(_tier_line("gold", "🥇", "GOLD"))
     lines.append("")
     return lines
 
@@ -2447,6 +2460,72 @@ def _card_tier_counts_and_users() -> tuple[dict[str, int], dict[str, list[LevelC
     for k in users.keys():
         users[k].sort(key=lambda c: (int(getattr(c, "visits", 0) or 0), str(getattr(c, "card_number", ""))), reverse=True)
     return (counts, users)
+
+
+def _admin_cards_list_keyboard(*, tier: str, page: int, has_prev: bool, has_next: bool) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardMarkup()
+    if has_prev:
+        kb.row(
+            InlineKeyboardButton(text="◀", callback_data=f"admin_cards_page:{tier}:{max(page-1, 0)}"),
+            InlineKeyboardButton(text="▶", callback_data=(f"admin_cards_page:{tier}:{page+1}" if has_next else "admin_stats_noop")),
+        )
+    else:
+        kb.row(InlineKeyboardButton(text="▶", callback_data=(f"admin_cards_page:{tier}:{page+1}" if has_next else "admin_stats_noop")))
+    kb.row(
+        InlineKeyboardButton(text="👈Назад", callback_data="admin_stats"),
+        InlineKeyboardButton(text="🏠Домой", callback_data="back_to_main"),
+    )
+    return kb
+
+
+def _render_admin_cards_list(*, tier: str, page: int) -> tuple[str, InlineKeyboardMarkup]:
+    if tier not in {"iron", "bronze", "silver", "gold"}:
+        tier = "iron"
+    per_page = 20
+    offset = max(int(page or 0), 0) * per_page
+    counts, users_by_tier = _card_tier_counts_and_users()
+    all_rows = users_by_tier.get(tier, [])
+    total = len(all_rows)
+    rows = all_rows[offset : offset + per_page]
+    has_prev = offset > 0
+    has_next = (offset + per_page) < total
+
+    title_map = {
+        "iron": "⚙️ IRON",
+        "bronze": "🥉 BRONZE",
+        "silver": "🥈 SILVER",
+        "gold": "🥇 GOLD",
+    }
+    lines = [f"<b>Владельцы карт {title_map.get(tier, tier.upper())}</b> — <b>{int(counts.get(tier, 0))}</b>", ""]
+    if not rows:
+        lines.append("Нет данных.")
+    else:
+        for i, c in enumerate(rows, start=offset + 1):
+            uid = int(getattr(c, "user_id", 0) or 0)
+            username = (getattr(c, "username", None) or "").strip().lstrip("@") or None
+            first = (getattr(c, "first_name", None) or "").strip()
+            last = (getattr(c, "last_name", None) or "").strip()
+            if first or last:
+                name = " ".join([x for x in [first, last] if x]).strip()
+            elif username:
+                name = f"@{username}"
+            else:
+                name = f"ID {uid}"
+            visits = int(getattr(c, "visits", 0) or 0)
+            card_number = str(getattr(c, "card_number", "") or "")
+            prefix = _rank_prefix(i)
+            lines.append(
+                f'{prefix}<a href="{_tg_user_link(uid, username)}"><b>{escape(name)}</b></a> - карта <b>{escape(card_number)}</b>, визитов <b>{visits}</b>'
+            )
+
+    text = "\n".join(lines)
+    kb = _admin_cards_list_keyboard(tier=tier, page=max(page, 0), has_prev=has_prev, has_next=has_next)
+    return (text, kb)
+
+
+def _send_admin_cards_list(chat_id: int, *, tier: str, page: int) -> None:
+    text, kb = _render_admin_cards_list(tier=tier, page=page)
+    bot.send_message(chat_id, text, reply_markup=kb, disable_web_page_preview=True)
 
 
 def _admin_stats_section_lines(*, mode: str, page: int) -> tuple[list[str], bool, bool]:
@@ -2737,10 +2816,9 @@ def _admin_stats_section_lines(*, mode: str, page: int) -> tuple[list[str], bool
 
 def _send_or_edit_admin_stats(call: telebot.types.CallbackQuery, *, mode: str, page: int) -> None:
     base = _admin_stats_base_lines()
-    card_counts, _ = _card_tier_counts_and_users()
     section, has_prev, has_next = _admin_stats_section_lines(mode=mode, page=page)
     text = "\n".join(base + section)
-    kb = _admin_stats_keyboard(mode=mode, page=page, has_prev=has_prev, has_next=has_next, card_counts=card_counts)
+    kb = _admin_stats_keyboard(mode=mode, page=page, has_prev=has_prev, has_next=has_next)
     try:
         if call.message is not None:
             bot.edit_message_text(
@@ -2778,7 +2856,7 @@ def handle_admin_stats_view(call: telebot.types.CallbackQuery) -> None:
     _send_or_edit_admin_stats(call, mode=mode, page=max(page, 0))
 
 
-@bot.callback_query_handler(func=lambda call: (call.data or "").startswith("admin_cards:"))
+@bot.callback_query_handler(func=lambda call: (call.data or "").startswith("admin_cards_page:"))
 def handle_admin_cards_view(call: telebot.types.CallbackQuery) -> None:
     if not _callback_guard(call):
         return
@@ -2787,7 +2865,7 @@ def handle_admin_cards_view(call: telebot.types.CallbackQuery) -> None:
     if not is_superadmin(call.from_user.id if call.from_user else None):
         return
     parts = (call.data or "").split(":")
-    # admin_cards:<tier>:<page>
+    # admin_cards_page:<tier>:<page>
     tier = (parts[1] if len(parts) > 1 else "iron").strip().lower()
     if tier not in {"iron", "bronze", "silver", "gold"}:
         tier = "iron"
@@ -2795,7 +2873,20 @@ def handle_admin_cards_view(call: telebot.types.CallbackQuery) -> None:
         page = int(parts[2]) if len(parts) > 2 else 0
     except Exception:
         page = 0
-    _send_or_edit_admin_stats(call, mode=f"cards_{tier}", page=max(page, 0))
+    text, kb = _render_admin_cards_list(tier=tier, page=max(page, 0))
+    try:
+        bot.edit_message_text(
+            text,
+            call.message.chat.id,
+            call.message.message_id,
+            reply_markup=kb,
+            disable_web_page_preview=True,
+        )
+    except Exception as e:
+        msg = str(e).lower()
+        if "message is not modified" in msg or "message_not_modified" in msg:
+            return
+        bot.send_message(call.message.chat.id, text, reply_markup=kb, disable_web_page_preview=True)
 
 
 @bot.callback_query_handler(func=lambda call: call.data == "admin_broadcast")
