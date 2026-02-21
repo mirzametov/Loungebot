@@ -2413,9 +2413,9 @@ def _admin_stats_base_lines() -> list[str]:
     def _tier_line(key: str, icon: str, label: str) -> str:
         n = int(counts.get(key, 0))
         if not bot_username:
-            return f"<b>{icon} {label}: {n}</b>"
+            return f"<b>{icon} {label}</b>: <b>{n}</b>"
         url = f"https://t.me/{bot_username}?start=admincards_{key}_0"
-        return f'<b><a href="{url}">{icon} {label}: {n}</a></b>'
+        return f'<b><a href="{url}">{icon} {label}</a></b>: <b>{n}</b>'
 
     lines.append("")
     lines.append("🪪 <b>Выдано карт</b> <b>LEVEL</b>")
@@ -2446,13 +2446,18 @@ def _card_tier_counts_and_users() -> tuple[dict[str, int], dict[str, list[LevelC
             lvl, _disc = tier_for_visits(int(getattr(c, "visits", 0) or 0))
         except Exception:
             lvl = "IRON⚙️"
-        key = "iron"
+        key: str | None = None
         if str(lvl).startswith("GOLD"):
             key = "gold"
         elif str(lvl).startswith("SILVER"):
             key = "silver"
         elif str(lvl).startswith("BRONZE"):
             key = "bronze"
+        elif str(lvl).startswith("IRON"):
+            key = "iron"
+        # Do not count non-tier cards, e.g. "-" (0 visits).
+        if key is None:
+            continue
         counts[key] += 1
         users[key].append(c)
 
