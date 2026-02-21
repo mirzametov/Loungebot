@@ -67,6 +67,7 @@ from loungebot.admin_roles import (
 )
 from loungebot.guest_cards import is_registered, register_card
 from loungebot.level_cards import (
+    LevelCard,
     add_visit_by_user_id,
     clear_staff_gold_by_user_id,
     ensure_level_card,
@@ -2323,7 +2324,14 @@ def handle_admin_stats(call: telebot.types.CallbackQuery) -> None:
     _send_or_edit_admin_stats(call, mode="top_visits", page=0)
 
 
-def _admin_stats_keyboard(*, mode: str, page: int, has_prev: bool, has_next: bool) -> InlineKeyboardMarkup:
+def _admin_stats_keyboard(
+    *,
+    mode: str,
+    page: int,
+    has_prev: bool,
+    has_next: bool,
+    card_counts: dict[str, int],
+) -> InlineKeyboardMarkup:
     kb = InlineKeyboardMarkup()
 
     def _tab(text: str, m: str) -> InlineKeyboardButton:
@@ -2355,6 +2363,14 @@ def _admin_stats_keyboard(*, mode: str, page: int, has_prev: bool, has_next: boo
     kb.row(_tab("🏆Визиты", "top_visits"), _tab("👆Клики", "top_clicks"))
     kb.row(_tab("🧾Список визитов", "visits_list"), _tab("💰Подписчики", "latest"))
     kb.row(_tab("🔥Топ экранов", "top_actions"), _tab("🐧Админы", "admins_visits"))
+    kb.row(
+        InlineKeyboardButton(text=f"⚙️IRON {int(card_counts.get('iron', 0))}", callback_data="admin_cards:iron:0"),
+        InlineKeyboardButton(text=f"🥉BRONZE {int(card_counts.get('bronze', 0))}", callback_data="admin_cards:bronze:0"),
+    )
+    kb.row(
+        InlineKeyboardButton(text=f"🥈SILVER {int(card_counts.get('silver', 0))}", callback_data="admin_cards:silver:0"),
+        InlineKeyboardButton(text=f"🥇GOLD {int(card_counts.get('gold', 0))}", callback_data="admin_cards:gold:0"),
+    )
 
     kb.row(
         InlineKeyboardButton(text="👈Назад", callback_data="admin_menu"),
@@ -2386,13 +2402,29 @@ def _admin_stats_base_lines() -> list[str]:
     lines.append(f"Подписались за 7 дней: <b>{subs_7}</b>")
     lines.append(f"Подписались за 30 дней: <b>{subs_30}</b>")
 
-    # Cards issued by LEVEL tier (computed from current visits; exclude staff cards).
+    counts, _users = _card_tier_counts_and_users()
+
+    lines.append("")
+    lines.append("🪪 <b>Выдано карт</b> <b>LEVEL</b>")
+    lines.append(f"<b>⚙️ IRON: {int(counts.get('iron', 0))}</b>")
+    lines.append(f"<b>🥉 BRONZE: {int(counts.get('bronze', 0))}</b>")
+    lines.append(f"<b>🥈 SILVER: {int(counts.get('silver', 0))}</b>")
+    lines.append(f"<b>🥇 GOLD: {int(counts.get('gold', 0))}</b>")
+    lines.append("")
+    return lines
+
+
+def _card_tier_counts_and_users() -> tuple[dict[str, int], dict[str, list[LevelCard]]]:
+    """
+    Returns:
+    - counts by tier key: iron/bronze/silver/gold
+    - users by tier key (excluding staff cards)
+    """
+    counts = {"iron": 0, "bronze": 0, "silver": 0, "gold": 0}
+    users: dict[str, list[LevelCard]] = {"iron": [], "bronze": [], "silver": [], "gold": []}
+
     cards = list_cards()
     staff_ids = _staff_user_ids_known()
-    c_iron = 0
-    c_bronze = 0
-    c_silver = 0
-    c_gold = 0
     for c in cards:
         try:
             uid = int(getattr(c, "user_id", 0) or 0)
@@ -2401,23 +2433,20 @@ def _admin_stats_base_lines() -> list[str]:
             lvl, _disc = tier_for_visits(int(getattr(c, "visits", 0) or 0))
         except Exception:
             lvl = "IRON⚙️"
+        key = "iron"
         if str(lvl).startswith("GOLD"):
-            c_gold += 1
+            key = "gold"
         elif str(lvl).startswith("SILVER"):
-            c_silver += 1
+            key = "silver"
         elif str(lvl).startswith("BRONZE"):
-            c_bronze += 1
-        elif str(lvl).startswith("IRON"):
-            c_iron += 1
+            key = "bronze"
+        counts[key] += 1
+        users[key].append(c)
 
-    lines.append("")
-    lines.append("🪪 <b>Выдано карт</b> <b>LEVEL</b>")
-    lines.append(f"<b>⚙️ IRON: {c_iron}</b>")
-    lines.append(f"<b>🥉 BRONZE: {c_bronze}</b>")
-    lines.append(f"<b>🥈 SILVER: {c_silver}</b>")
-    lines.append(f"<b>🥇 GOLD: {c_gold}</b>")
-    lines.append("")
-    return lines
+    # Stable sort by visits (desc), then by card number.
+    for k in users.keys():
+        users[k].sort(key=lambda c: (int(getattr(c, "visits", 0) or 0), str(getattr(c, "card_number", ""))), reverse=True)
+    return (counts, users)
 
 
 def _admin_stats_section_lines(*, mode: str, page: int) -> tuple[list[str], bool, bool]:
@@ -2427,6 +2456,46 @@ def _admin_stats_section_lines(*, mode: str, page: int) -> tuple[list[str], bool
     lines: list[str] = []
     has_prev = offset > 0
     has_next = False
+
+    if mode.startswith("cards_"):
+        tier = mode.split("_", 1)[1].strip().lower()
+        if tier not in {"iron", "bronze", "silver", "gold"}:
+            tier = "iron"
+        counts, users_by_tier = _card_tier_counts_and_users()
+        all_rows = users_by_tier.get(tier, [])
+        total = len(all_rows)
+        rows = all_rows[offset : offset + per_page]
+        has_next = (offset + per_page) < total
+
+        title_map = {
+            "iron": "⚙️ IRON",
+            "bronze": "🥉 BRONZE",
+            "silver": "🥈 SILVER",
+            "gold": "🥇 GOLD",
+        }
+        lines.append(f"<b>Владельцы карт {title_map.get(tier, tier.upper())}</b> — <b>{int(counts.get(tier, 0))}</b>")
+        if not rows:
+            lines.append("Нет данных.")
+            return (lines, has_prev, has_next)
+
+        for i, c in enumerate(rows, start=offset + 1):
+            uid = int(getattr(c, "user_id", 0) or 0)
+            username = (getattr(c, "username", None) or "").strip().lstrip("@") or None
+            first = (getattr(c, "first_name", None) or "").strip()
+            last = (getattr(c, "last_name", None) or "").strip()
+            if first or last:
+                name = " ".join([x for x in [first, last] if x]).strip()
+            elif username:
+                name = f"@{username}"
+            else:
+                name = f"ID {uid}"
+            visits = int(getattr(c, "visits", 0) or 0)
+            card_number = str(getattr(c, "card_number", "") or "")
+            prefix = _rank_prefix(i)
+            lines.append(
+                f'{prefix}<a href="{_tg_user_link(uid, username)}"><b>{escape(name)}</b></a> - карта <b>{escape(card_number)}</b>, визитов <b>{visits}</b>'
+            )
+        return (lines, has_prev, has_next)
 
     if mode == "latest":
         rows, total = recent_subscribers(offset=offset, limit=per_page, active_only=True)
@@ -2668,9 +2737,10 @@ def _admin_stats_section_lines(*, mode: str, page: int) -> tuple[list[str], bool
 
 def _send_or_edit_admin_stats(call: telebot.types.CallbackQuery, *, mode: str, page: int) -> None:
     base = _admin_stats_base_lines()
+    card_counts, _ = _card_tier_counts_and_users()
     section, has_prev, has_next = _admin_stats_section_lines(mode=mode, page=page)
     text = "\n".join(base + section)
-    kb = _admin_stats_keyboard(mode=mode, page=page, has_prev=has_prev, has_next=has_next)
+    kb = _admin_stats_keyboard(mode=mode, page=page, has_prev=has_prev, has_next=has_next, card_counts=card_counts)
     try:
         if call.message is not None:
             bot.edit_message_text(
@@ -2706,6 +2776,26 @@ def handle_admin_stats_view(call: telebot.types.CallbackQuery) -> None:
     except Exception:
         page = 0
     _send_or_edit_admin_stats(call, mode=mode, page=max(page, 0))
+
+
+@bot.callback_query_handler(func=lambda call: (call.data or "").startswith("admin_cards:"))
+def handle_admin_cards_view(call: telebot.types.CallbackQuery) -> None:
+    if not _callback_guard(call):
+        return
+    if call.message is None:
+        return
+    if not is_superadmin(call.from_user.id if call.from_user else None):
+        return
+    parts = (call.data or "").split(":")
+    # admin_cards:<tier>:<page>
+    tier = (parts[1] if len(parts) > 1 else "iron").strip().lower()
+    if tier not in {"iron", "bronze", "silver", "gold"}:
+        tier = "iron"
+    try:
+        page = int(parts[2]) if len(parts) > 2 else 0
+    except Exception:
+        page = 0
+    _send_or_edit_admin_stats(call, mode=f"cards_{tier}", page=max(page, 0))
 
 
 @bot.callback_query_handler(func=lambda call: call.data == "admin_broadcast")
