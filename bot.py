@@ -466,6 +466,37 @@ def _tg_user_link(user_id: int, username: str | None = None) -> str:
     return f"tg://user?id={user_id}"
 
 
+def _bot_username() -> str:
+    return (os.getenv("BOT_USERNAME", "") or "").strip().lstrip("@")
+
+
+def _admin_user_deep_link(user_id: int) -> str:
+    b = _bot_username()
+    if not b:
+        return _tg_user_link(user_id, None)
+    return f"https://t.me/{b}?start=adminuser_{int(user_id)}"
+
+
+def _admin_user_visits_deep_link(user_id: int, page: int = 0, source: str | None = None) -> str:
+    b = _bot_username()
+    if not b:
+        return _admin_user_deep_link(user_id)
+    src = (source or "").strip().lower()
+    if src:
+        return f"https://t.me/{b}?start=adminvisits_{int(user_id)}_{max(int(page), 0)}_{src}"
+    return f"https://t.me/{b}?start=adminvisits_{int(user_id)}_{max(int(page), 0)}"
+
+
+def _display_first_name(uid: int, *, fallback_username: str | None = None) -> str:
+    st = get_user_stats(int(uid)) or {}
+    first = (st.get("first_name") or "").strip()
+    if first:
+        return first
+    if isinstance(fallback_username, str) and fallback_username.strip():
+        return fallback_username.strip().lstrip("@")
+    return f"ID {int(uid)}"
+
+
 def _rank_prefix(i: int) -> str:
     if i == 1:
         return "🥇"
@@ -2234,6 +2265,45 @@ def handle_start(message: telebot.types.Message) -> None:
         _send_admin_cards_list(message.chat.id, tier=tier, page=max(page, 0))
         _delete_command_message(message)
         return
+    if payload.startswith("adminuser_"):
+        if not _is_staff(message.from_user):
+            _delete_command_message(message)
+            return
+        try:
+            uid = int(payload.split("_", 1)[1])
+        except Exception:
+            _delete_command_message(message)
+            return
+        bot.send_message(
+            message.chat.id,
+            _admin_user_profile_text(uid),
+            reply_markup=_admin_user_profile_keyboard(uid),
+            disable_web_page_preview=True,
+        )
+        _delete_command_message(message)
+        return
+    if payload.startswith("adminvisits_"):
+        if not _is_staff(message.from_user):
+            _delete_command_message(message)
+            return
+        # adminvisits_<uid>_<page>[_<source>]
+        parts = payload.split("_")
+        try:
+            uid = int(parts[1]) if len(parts) > 1 else 0
+        except Exception:
+            uid = 0
+        try:
+            page = int(parts[2]) if len(parts) > 2 else 0
+        except Exception:
+            page = 0
+        src = parts[3] if len(parts) > 3 else ""
+        if src == "all":
+            src = ""
+        if uid > 0:
+            text, kb = _render_admin_user_visits(uid, page=max(page, 0), source=src)
+            bot.send_message(message.chat.id, text, reply_markup=kb, disable_web_page_preview=True)
+        _delete_command_message(message)
+        return
 
     send_main_menu(message.chat.id, user=message.from_user)
     _delete_command_message(message)
@@ -2501,27 +2571,16 @@ def _render_admin_cards_list(*, tier: str, page: int) -> tuple[str, InlineKeyboa
         "silver": "🥈 SILVER",
         "gold": "🥇 GOLD",
     }
-    lines = [f"<b>Владельцы карт {title_map.get(tier, tier.upper())}</b> — <b>{int(counts.get(tier, 0))}</b>", ""]
+    lines = [f"<b>Владельцы карт {title_map.get(tier, tier.upper())}</b> - <b>{int(counts.get(tier, 0))}</b>", ""]
     if not rows:
         lines.append("Нет данных.")
     else:
         for i, c in enumerate(rows, start=offset + 1):
             uid = int(getattr(c, "user_id", 0) or 0)
             username = (getattr(c, "username", None) or "").strip().lstrip("@") or None
-            first = (getattr(c, "first_name", None) or "").strip()
-            last = (getattr(c, "last_name", None) or "").strip()
-            if first or last:
-                name = " ".join([x for x in [first, last] if x]).strip()
-            elif username:
-                name = f"@{username}"
-            else:
-                name = f"ID {uid}"
-            visits = int(getattr(c, "visits", 0) or 0)
-            card_number = str(getattr(c, "card_number", "") or "")
+            name = _display_first_name(uid, fallback_username=username)
             prefix = _rank_prefix(i)
-            lines.append(
-                f'{prefix}<a href="{_tg_user_link(uid, username)}"><b>{escape(name)}</b></a> - карта <b>{escape(card_number)}</b>, визитов <b>{visits}</b>'
-            )
+            lines.append(f'{prefix}<a href="{_admin_user_deep_link(uid)}"><b>{escape(name)}</b></a>')
 
     text = "\n".join(lines)
     kb = _admin_cards_list_keyboard(tier=tier, page=max(page, 0), has_prev=has_prev, has_next=has_next)
@@ -2531,6 +2590,144 @@ def _render_admin_cards_list(*, tier: str, page: int) -> tuple[str, InlineKeyboa
 def _send_admin_cards_list(chat_id: int, *, tier: str, page: int) -> None:
     text, kb = _render_admin_cards_list(tier=tier, page=page)
     bot.send_message(chat_id, text, reply_markup=kb, disable_web_page_preview=True)
+
+
+def _user_visit_events(uid: int, *, source: str | None = None) -> list[dict[str, str]]:
+    st = get_user_stats(int(uid)) or {}
+    events = st.get("visit_events") or []
+    if not isinstance(events, list):
+        return []
+    src_filter = (source or "").strip().lower() or None
+    out: list[dict[str, str]] = []
+    for raw in events:
+        if not raw:
+            continue
+        if isinstance(raw, dict):
+            ts = str(raw.get("ts") or "")
+            src = str(raw.get("src") or "lounge").strip().lower() or "lounge"
+        else:
+            ts = str(raw)
+            src = "lounge"
+        if not ts:
+            continue
+        if src_filter and src != src_filter:
+            continue
+        out.append({"ts": ts, "src": src})
+    out.sort(key=lambda r: str(r.get("ts") or ""), reverse=True)
+    return out
+
+
+def _src_label(src: str) -> str:
+    s = (src or "").strip().lower()
+    if s in {"lounge", "bar", "nagrani"}:
+        return "Lounge"
+    if s in {"prohvat", "prohvat72", "prokat"}:
+        return "Прохват72"
+    return s or "Lounge"
+
+
+def _admin_user_profile_text(uid: int) -> str:
+    st = get_user_stats(int(uid)) or {}
+    username = (st.get("username") or "").strip().lstrip("@")
+    first = (st.get("first_name") or "").strip()
+    last = (st.get("last_name") or "").strip()
+    clicks = int(st.get("clicks", 0) or 0)
+
+    card = find_card_by_user_id(int(uid))
+    card_level = card.level if card else "-"
+    card_number = card.card_number if card else "-"
+
+    all_events = _user_visit_events(int(uid))
+    total_visits = max(int(st.get("visits", 0) or 0), len(all_events))
+    by_src: dict[str, int] = {}
+    for ev in all_events:
+        src = str(ev.get("src") or "lounge").strip().lower() or "lounge"
+        by_src[src] = by_src.get(src, 0) + 1
+
+    name = first or _display_first_name(int(uid), fallback_username=username or None)
+    tg_link = _tg_user_link(int(uid), username or None)
+    visits_link = _admin_user_visits_deep_link(int(uid), 0)
+
+    lines: list[str] = []
+    lines.append("<b>Карточка клиента</b>")
+    lines.append("")
+    lines.append(f"Имя: <b>{escape(name)}</b>")
+    lines.append(f"Фамилия: <b>{escape(last or '-')}</b>")
+    if username:
+        lines.append(f'Ник: <b><a href="{tg_link}">@{escape(username)}</a></b>')
+    else:
+        lines.append("Ник: <b>-</b>")
+    lines.append("")
+    lines.append(f"Карта LEVEL: <b>{escape(str(card_level))}</b>")
+    lines.append(f"Номер карты: <b>{escape(str(card_number))}</b>")
+    lines.append(f"Кликов в боте: <b>{clicks}</b>")
+    lines.append(f'Визитов (всего): <b><a href="{visits_link}">{total_visits}</a></b>')
+
+    # If user has visits from multiple sources, show split lines.
+    if len([v for v in by_src.values() if v > 0]) > 1:
+        for src, cnt in sorted(by_src.items(), key=lambda x: x[0]):
+            lines.append(
+                f'Визитов в {_src_label(src)}: <b><a href="{_admin_user_visits_deep_link(int(uid), 0, src)}">{int(cnt)}</a></b>'
+            )
+
+    return "\n".join(lines)
+
+
+def _admin_user_profile_keyboard(uid: int) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardMarkup()
+    st = get_user_stats(int(uid)) or {}
+    username = (st.get("username") or "").strip().lstrip("@")
+    kb.row(InlineKeyboardButton(text="📅Визиты", callback_data=f"admin_user_visits:{int(uid)}:0:all"))
+    if username:
+        kb.row(InlineKeyboardButton(text="↗️Telegram", url=_tg_user_link(int(uid), username)))
+    kb.row(
+        InlineKeyboardButton(text="👈Назад", callback_data="admin_stats"),
+        InlineKeyboardButton(text="🏠Домой", callback_data="back_to_main"),
+    )
+    return kb
+
+
+def _render_admin_user_visits(uid: int, *, page: int, source: str | None = None) -> tuple[str, InlineKeyboardMarkup]:
+    per_page = 20
+    offset = max(int(page or 0), 0) * per_page
+    src = (source or "").strip().lower() or None
+    events = _user_visit_events(int(uid), source=src)
+    total = len(events)
+    rows = events[offset : offset + per_page]
+    has_prev = offset > 0
+    has_next = (offset + per_page) < total
+
+    label = _src_label(src or "")
+    head = "Все визиты" if not src else f"Визиты: {label}"
+    lines = [f"<b>{head}</b> — <b>{total}</b>", ""]
+    tz = _tyumen_now().tzinfo
+    for i, ev in enumerate(rows, start=offset + 1):
+        raw = str(ev.get("ts") or "")
+        try:
+            dt = datetime.fromisoformat(raw)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=datetime.now().astimezone().tzinfo)
+            dt = dt.astimezone(tz)
+            ts = f"{dt.day:02d}.{dt.month:02d}.{dt.year:04d} {dt.hour:02d}:{dt.minute:02d}"
+        except Exception:
+            ts = raw
+        lines.append(f"{_rank_prefix(i)}<b>{escape(ts)}</b> - {_src_label(str(ev.get('src') or ''))}")
+
+    kb = InlineKeyboardMarkup()
+    next_cb = f"admin_user_visits:{int(uid)}:{page+1}:{src or 'all'}" if has_next else "admin_stats_noop"
+    if has_prev:
+        kb.row(
+            InlineKeyboardButton(text="◀", callback_data=f"admin_user_visits:{int(uid)}:{max(page-1,0)}:{src or 'all'}"),
+            InlineKeyboardButton(text="▶", callback_data=next_cb),
+        )
+    else:
+        kb.row(InlineKeyboardButton(text="▶", callback_data=next_cb))
+    kb.row(InlineKeyboardButton(text="👤Профиль", callback_data=f"admin_user_profile:{int(uid)}"))
+    kb.row(
+        InlineKeyboardButton(text="👈Назад", callback_data="admin_stats"),
+        InlineKeyboardButton(text="🏠Домой", callback_data="back_to_main"),
+    )
+    return ("\n".join(lines), kb)
 
 
 def _admin_stats_section_lines(*, mode: str, page: int) -> tuple[list[str], bool, bool]:
@@ -2557,7 +2754,7 @@ def _admin_stats_section_lines(*, mode: str, page: int) -> tuple[list[str], bool
             "silver": "🥈 SILVER",
             "gold": "🥇 GOLD",
         }
-        lines.append(f"<b>Владельцы карт {title_map.get(tier, tier.upper())}</b> — <b>{int(counts.get(tier, 0))}</b>")
+        lines.append(f"<b>Владельцы карт {title_map.get(tier, tier.upper())}</b> - <b>{int(counts.get(tier, 0))}</b>")
         if not rows:
             lines.append("Нет данных.")
             return (lines, has_prev, has_next)
@@ -2565,20 +2762,9 @@ def _admin_stats_section_lines(*, mode: str, page: int) -> tuple[list[str], bool
         for i, c in enumerate(rows, start=offset + 1):
             uid = int(getattr(c, "user_id", 0) or 0)
             username = (getattr(c, "username", None) or "").strip().lstrip("@") or None
-            first = (getattr(c, "first_name", None) or "").strip()
-            last = (getattr(c, "last_name", None) or "").strip()
-            if first or last:
-                name = " ".join([x for x in [first, last] if x]).strip()
-            elif username:
-                name = f"@{username}"
-            else:
-                name = f"ID {uid}"
-            visits = int(getattr(c, "visits", 0) or 0)
-            card_number = str(getattr(c, "card_number", "") or "")
+            name = _display_first_name(uid, fallback_username=username)
             prefix = _rank_prefix(i)
-            lines.append(
-                f'{prefix}<a href="{_tg_user_link(uid, username)}"><b>{escape(name)}</b></a> - карта <b>{escape(card_number)}</b>, визитов <b>{visits}</b>'
-            )
+            lines.append(f'{prefix}<a href="{_admin_user_deep_link(uid)}"><b>{escape(name)}</b></a>')
         return (lines, has_prev, has_next)
 
     if mode == "latest":
@@ -2600,13 +2786,7 @@ def _admin_stats_section_lines(*, mode: str, page: int) -> tuple[list[str], bool
                 username = username.strip().lstrip("@") or None
             else:
                 username = None
-            name = (
-                (row.get("first_name") or "")
-                or (row.get("last_name") or "")
-                or (username or "")
-                or str(uid)
-            )
-            name = escape(str(name))
+            name = escape(_display_first_name(uid, fallback_username=username))
 
             raw = row.get("joined_at")
             dt = None
@@ -2625,7 +2805,7 @@ def _admin_stats_section_lines(*, mode: str, page: int) -> tuple[list[str], bool
                 current_date = dkey
                 lines.append("")
                 lines.append(f"<b>{escape(dkey)}</b>")
-            lines.append(f'<a href="{_tg_user_link(uid, username)}"><b>{name}</b></a>')
+            lines.append(f'<a href="{_admin_user_deep_link(uid)}"><b>{name}</b></a>')
         return (lines, has_prev, has_next)
 
     if mode == "visits_list":
@@ -2647,8 +2827,7 @@ def _admin_stats_section_lines(*, mode: str, page: int) -> tuple[list[str], bool
                 username = username.strip().lstrip("@") or None
             else:
                 username = None
-            name = stats.get("first_name") or stats.get("last_name") or (f"@{username}" if username else None) or str(uid)
-            name = escape(str(name))
+            name = escape(_display_first_name(uid, fallback_username=username))
 
             raw = row.get("ts")
             dt = None
@@ -2671,7 +2850,7 @@ def _admin_stats_section_lines(*, mode: str, page: int) -> tuple[list[str], bool
                 lines.append("")
                 lines.append(f"<b>{escape(dkey)}</b>")
 
-            lines.append(f'{escape(time_s)}<a href="{_tg_user_link(uid, username)}"><b>{name}</b></a>')
+            lines.append(f'{escape(time_s)}<a href="{_admin_user_deep_link(uid)}"><b>{name}</b></a>')
         return (lines, has_prev, has_next)
 
     if mode == "top_visits":
@@ -2688,11 +2867,10 @@ def _admin_stats_section_lines(*, mode: str, page: int) -> tuple[list[str], bool
                 username = username.strip().lstrip("@") or None
             else:
                 username = None
-            name = row.get("first_name") or row.get("username") or str(uid)
-            name = escape(str(name))
+            name = escape(_display_first_name(uid, fallback_username=username))
             visits = int(row.get("visits", 0) or 0)
             prefix = _rank_prefix(i)
-            lines.append(f'{prefix}<a href="{_tg_user_link(uid, username)}"><b>{name}</b></a> - визитов <b>{visits}</b>')
+            lines.append(f'{prefix}<a href="{_admin_user_deep_link(uid)}"><b>{name}</b></a> - визитов <b>{visits}</b>')
         return (lines, has_prev, has_next)
 
     if mode == "admins_visits":
@@ -2724,9 +2902,9 @@ def _admin_stats_section_lines(*, mode: str, page: int) -> tuple[list[str], bool
                 first = stats.get("first_name")
                 last = None
             u = (u or "").strip().lstrip("@") or None
-            label = f"@{u}" if u else "Без ника"
+            label = _display_first_name(aid, fallback_username=u)
             prefix = _rank_prefix(i)
-            lines.append(f'{prefix}<a href="{_tg_user_link(aid, u)}"><b>{escape(label)}</b></a> - визитов <b>{v}</b>')
+            lines.append(f'{prefix}<a href="{_admin_user_deep_link(aid)}"><b>{escape(label)}</b></a> - визитов <b>{v}</b>')
         return (lines, has_prev, has_next)
 
     if mode == "top_actions":
@@ -2803,18 +2981,17 @@ def _admin_stats_section_lines(*, mode: str, page: int) -> tuple[list[str], bool
         return (lines, has_prev, has_next)
     for i, row in enumerate(rows, start=offset + 1):
         uid = int(row["user_id"])
-        name = row.get("first_name") or row.get("username") or str(uid)
-        name = escape(str(name))
         username = row.get("username")
         if isinstance(username, str):
             username = username.strip().lstrip("@") or None
         else:
             username = None
+        name = escape(_display_first_name(uid, fallback_username=username))
         clicks = int(row.get("clicks", 0) or 0)
         visits = int(row.get("visits", 0) or 0)
         prefix = _rank_prefix(i)
         lines.append(
-            f'{prefix}<a href="{_tg_user_link(uid, username)}"><b>{name}</b></a> - кликов <b>{clicks}</b>, визитов <b>{visits}</b>'
+            f'{prefix}<a href="{_admin_user_deep_link(uid)}"><b>{name}</b></a> - кликов <b>{clicks}</b>, визитов <b>{visits}</b>'
         )
     return (lines, has_prev, has_next)
 
@@ -2879,6 +3056,74 @@ def handle_admin_cards_view(call: telebot.types.CallbackQuery) -> None:
     except Exception:
         page = 0
     text, kb = _render_admin_cards_list(tier=tier, page=max(page, 0))
+    try:
+        bot.edit_message_text(
+            text,
+            call.message.chat.id,
+            call.message.message_id,
+            reply_markup=kb,
+            disable_web_page_preview=True,
+        )
+    except Exception as e:
+        msg = str(e).lower()
+        if "message is not modified" in msg or "message_not_modified" in msg:
+            return
+        bot.send_message(call.message.chat.id, text, reply_markup=kb, disable_web_page_preview=True)
+
+
+@bot.callback_query_handler(func=lambda call: (call.data or "").startswith("admin_user_profile:"))
+def handle_admin_user_profile(call: telebot.types.CallbackQuery) -> None:
+    if not _callback_guard(call):
+        return
+    if call.message is None:
+        return
+    if not _is_staff(call.from_user):
+        return
+    try:
+        uid = int((call.data or "").split(":", 1)[1])
+    except Exception:
+        return
+    text = _admin_user_profile_text(uid)
+    kb = _admin_user_profile_keyboard(uid)
+    try:
+        bot.edit_message_text(
+            text,
+            call.message.chat.id,
+            call.message.message_id,
+            reply_markup=kb,
+            disable_web_page_preview=True,
+        )
+    except Exception as e:
+        msg = str(e).lower()
+        if "message is not modified" in msg or "message_not_modified" in msg:
+            return
+        bot.send_message(call.message.chat.id, text, reply_markup=kb, disable_web_page_preview=True)
+
+
+@bot.callback_query_handler(func=lambda call: (call.data or "").startswith("admin_user_visits:"))
+def handle_admin_user_visits(call: telebot.types.CallbackQuery) -> None:
+    if not _callback_guard(call):
+        return
+    if call.message is None:
+        return
+    if not _is_staff(call.from_user):
+        return
+    # admin_user_visits:<uid>:<page>:<source|all>
+    parts = (call.data or "").split(":")
+    try:
+        uid = int(parts[1]) if len(parts) > 1 else 0
+    except Exception:
+        uid = 0
+    try:
+        page = int(parts[2]) if len(parts) > 2 else 0
+    except Exception:
+        page = 0
+    src = parts[3] if len(parts) > 3 else ""
+    if src == "all":
+        src = ""
+    if uid <= 0:
+        return
+    text, kb = _render_admin_user_visits(uid, page=max(page, 0), source=src)
     try:
         bot.edit_message_text(
             text,
