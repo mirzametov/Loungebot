@@ -3345,11 +3345,15 @@ def handle_admin_visit_input(message: telebot.types.Message) -> None:
 
     add_visit_marked(card.user_id, admin_id, source=BOT_SOURCE)
     # Keep a simple total counter on the client card, too.
+    prev_visits = int(getattr(card, "visits", 0) or 0)
     updated = add_visit_by_user_id(card.user_id, 1)
     _pending_visit_add.pop(message.chat.id, None)
 
     base_discount = updated.discount if updated is not None else card.discount
     discount, _bonus = total_discount_for_user(card.user_id, int(base_discount))
+    # Business rule: when the very first visit is being added, show 0% in admin confirmation.
+    if prev_visits <= 0:
+        discount = 0
     bot.send_message(
         message.chat.id,
         f"Визит засчитан.\nСкидка <b>{discount}%</b>",
