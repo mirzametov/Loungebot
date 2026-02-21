@@ -2659,7 +2659,7 @@ def _admin_user_profile_text(uid: int) -> str:
     else:
         lines.append("<b>-</b>")
     lines.append("")
-    lines.append(f"Карта LEVEL: <b>{escape(str(card_level))}</b>")
+    lines.append(f"<b>Карта LEVEL: {escape(str(card_level))}</b>")
     lines.append(f"Номер карты: <b>{escape(str(card_number))}</b>")
     lines.append(f"Кликов в боте: <b>{clicks}</b>")
     lines.append(f'Визитов (всего): <b><a href="{visits_link}">{total_visits}</a></b>')
