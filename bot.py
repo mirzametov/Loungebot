@@ -2644,19 +2644,20 @@ def _admin_user_profile_text(uid: int) -> str:
         src = str(ev.get("src") or "lounge").strip().lower() or "lounge"
         by_src[src] = by_src.get(src, 0) + 1
 
-    name = first or _display_first_name(int(uid), fallback_username=username or None)
+    full_name = " ".join([x for x in [first, last] if x]).strip()
+    if not full_name:
+        full_name = _display_first_name(int(uid), fallback_username=username or None)
     tg_link = _tg_user_link(int(uid), username or None)
     visits_link = _admin_user_visits_deep_link(int(uid), 0)
 
     lines: list[str] = []
     lines.append("<b>Карточка клиента</b>")
     lines.append("")
-    lines.append(f"Имя: <b>{escape(name)}</b>")
-    lines.append(f"Фамилия: <b>{escape(last or '-')}</b>")
+    lines.append(f"<b>{escape(full_name)}</b>")
     if username:
-        lines.append(f'Ник: <b><a href="{tg_link}">@{escape(username)}</a></b>')
+        lines.append(f'<b><a href="{tg_link}">@{escape(username)}</a></b>')
     else:
-        lines.append("Ник: <b>-</b>")
+        lines.append("<b>-</b>")
     lines.append("")
     lines.append(f"Карта LEVEL: <b>{escape(str(card_level))}</b>")
     lines.append(f"Номер карты: <b>{escape(str(card_number))}</b>")
