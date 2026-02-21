@@ -2871,7 +2871,7 @@ def _admin_stats_section_lines(*, mode: str, page: int) -> tuple[list[str], bool
             name = escape(_display_first_name(uid, fallback_username=username))
             visits = int(row.get("visits", 0) or 0)
             prefix = _rank_prefix(i)
-            lines.append(f'{prefix}<a href="{_admin_user_deep_link(uid)}"><b>{name}</b></a> - визитов <b>{visits}</b>')
+            lines.append(f'{prefix}<a href="{_admin_user_deep_link(uid)}"><b>{name}</b></a> - <b>{visits}</b>')
         return (lines, has_prev, has_next)
 
     if mode == "admins_visits":
@@ -2905,7 +2905,7 @@ def _admin_stats_section_lines(*, mode: str, page: int) -> tuple[list[str], bool
             u = (u or "").strip().lstrip("@") or None
             label = _display_first_name(aid, fallback_username=u)
             prefix = _rank_prefix(i)
-            lines.append(f'{prefix}<a href="{_admin_user_deep_link(aid)}"><b>{escape(label)}</b></a> - визитов <b>{v}</b>')
+            lines.append(f'{prefix}<a href="{_admin_user_deep_link(aid)}"><b>{escape(label)}</b></a> - обслужил <b>{v}</b>')
         return (lines, has_prev, has_next)
 
     if mode == "top_actions":
@@ -2991,7 +2991,7 @@ def _admin_stats_section_lines(*, mode: str, page: int) -> tuple[list[str], bool
         clicks = int(row.get("clicks", 0) or 0)
         prefix = _rank_prefix(i)
         lines.append(
-            f'{prefix}<a href="{_admin_user_deep_link(uid)}"><b>{name}</b></a> - кликов <b>{clicks}</b>'
+            f'{prefix}<a href="{_admin_user_deep_link(uid)}"><b>{name}</b></a> - <b>{clicks}</b>'
         )
     return (lines, has_prev, has_next)
 
