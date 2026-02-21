@@ -658,6 +658,19 @@ def send_pitbike_photo(chat_id: int) -> None:
         bot.send_photo(chat_id, f)
 
 
+def send_mangal_kebab_photo(chat_id: int) -> None:
+    """
+    Sends partner food promo photo as a plain photo message (no text/buttons).
+    """
+    # Configurable path. Fallback to lounge source so flow never breaks.
+    p = Path(os.getenv("MANGAL_KEBAB_IMAGE_PATH", "assets/lounge_source.jpg"))
+    if not p.exists():
+        bot.send_message(chat_id, "Фото МАНГАЛ🔥КЕБАБ не найдено.")
+        return
+    with p.open("rb") as f:
+        bot.send_photo(chat_id, f)
+
+
 def menu_inline_keyboard(
     *,
     active: str | None = None,
@@ -2188,6 +2201,10 @@ def handle_start(message: telebot.types.Message) -> None:
         # Deep-link: show the pitbike photo directly (no gallery UI).
         send_pitbike_photo(message.chat.id)
         return
+    if payload == "mangal_kebab":
+        # Deep-link: show partner food photo directly (no extra UI).
+        send_mangal_kebab_photo(message.chat.id)
+        return
 
     send_main_menu(message.chat.id, user=message.from_user)
 
@@ -3655,7 +3672,19 @@ def handle_menu_sections(call: telebot.types.CallbackQuery) -> None:
                 "• Апельсин-имбирь"
             )
         if cb == "menu_food":
-            return "Со своей едой - <b>можно</b>\n\nГолодными не оставим, подскажем быструю доставку🚚"
+            bot_username = (os.getenv("BOT_USERNAME", "") or "").strip().lstrip("@")
+            mangal_link = f"https://t.me/{bot_username}?start=mangal_kebab" if bot_username else ""
+            mangal_word = (
+                f'<b><a href="{mangal_link}">МАНГАЛ🔥КЕБАБ</a></b>'
+                if mangal_link
+                else "<b>МАНГАЛ🔥КЕБАБ</b>"
+            )
+            return (
+                "<b>Кухни нет - но голодными не оставим</b> 🍢\n\n"
+                "Еду можно заказать у партнёров с быстрой доставкой к нам🚚\n"
+                f"Нажми на заведение ниже - откроется меню\n\n{mangal_word}\n\n"
+                "Можно со своей едой 🍔 или заказывай доставку где удобно - мы не против"
+            )
         if cb == "menu_drinks":
             base = (
                 "<b>БЕЗАЛКОГОЛЬНЫЕ НАПИТКИ</b>\n"
